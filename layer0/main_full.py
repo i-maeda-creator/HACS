@@ -44,11 +44,21 @@ def main():
     sim.save_log("logs/events_full.jsonl")
     sim.save_replay("replays/replay_full.jsonl")
 
-    print("\n--- 最終 Policy スコア ---")
+    print("\n--- Safety Gate ---")
+    print(f"  violations: {len(sim.safety.violations)}")
+    for v in sim.safety.violations[:5]:
+        print(f"    tick={v.tick} rule={v.rule} agent={v.agent_id} severity={v.severity}")
+
+    print("\n--- Policy スコア ---")
     scores = sim.policy.score(sim.agents, sim.tasks)
     for k, v in scores.items():
         print(f"  {k}: {v}")
     print(f"  violations: {len(sim.policy.violations)}")
+
+    safety_event_count = sum(1 for e in sim.event_log if e.event_type.value == "SafetyTriggered")
+    total_events = len(sim.event_log)
+    print(f"\n--- Event Log ---")
+    print(f"  total: {total_events}  safety_triggered: {safety_event_count}")
 
     # ── Web 3D ビューアー用 JSON ──────────────────────────
     print("\nWeb リプレイデータを生成中...")

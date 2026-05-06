@@ -87,8 +87,9 @@ class PolicyEngine:
                     events.append(Event(
                         tick=tick,
                         event_type=EventType.POLICY_CHANGED,
+                        source="policy_engine",
                         agent_id=agent.agent_id,
-                        data={"rule": hc.name, "type": "hard"},
+                        payload={"rule": hc.name, "type": "hard"},
                     ))
 
             for sc in self.soft:
@@ -99,8 +100,9 @@ class PolicyEngine:
                     events.append(Event(
                         tick=tick,
                         event_type=EventType.POLICY_CHANGED,
+                        source="policy_engine",
                         agent_id=agent.agent_id,
-                        data={"rule": sc.name, "type": "soft", "penalty": sc.penalty},
+                        payload={"rule": sc.name, "type": "soft", "penalty": sc.penalty},
                     ))
 
         return events

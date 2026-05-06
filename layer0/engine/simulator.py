@@ -8,6 +8,7 @@ from layer0.core.agent import Agent, AgentRole, AgentStatus
 from layer0.core.task import Task, TaskStatus, make_task
 from layer0.core.economy import Economy
 from layer0.core.policy import PolicyEngine
+from layer0.core.safety import SafetyGate
 from layer0.schemas.event import Event, EventType
 from layer0.schemas.state import StateSnapshot, AgentSnapshot, TaskSnapshot, EconomySnapshot
 
@@ -17,11 +18,13 @@ class Simulator:
         self.seed = seed
         self.rng = random.Random(seed)
         self.tick = 0
+        self._seq = 0
         self.world = world or World.default_layout()
         self.agents: List[Agent] = []
         self.tasks: List[Task] = []
         self.economy = Economy()
         self.policy = policy or PolicyEngine()
+        self.safety = SafetyGate()
         self.event_log: List[Event] = []
         self.snapshots: List[StateSnapshot] = []
 
@@ -45,6 +48,9 @@ class Simulator:
         self.tick += 1
         if self.tick % 5 == 0:
             self.spawn_task()
+        # Safety first — must run before Policy and Economy
+        safety_events = self.safety.check(self.agents, self.tick)
+        self.event_log.extend(safety_events)
         policy_events = self.policy.apply(self.agents, self.tasks, self.tick)
         self.event_log.extend(policy_events)
         self._run_auctions()
@@ -117,13 +123,17 @@ class Simulator:
                 agent.status = AgentStatus.CHARGING
                 self._emit(EventType.AGENT_CHARGED, agent_id=agent.agent_id, data={"energy": agent.energy})
 
-    def _emit(self, event_type: EventType, agent_id: Optional[str] = None, task_id: Optional[str] = None, data: Optional[Dict] = None) -> None:
+    def _emit(self, event_type: EventType, agent_id: Optional[str] = None,
+              task_id: Optional[str] = None, data: Optional[Dict] = None) -> None:
+        self._seq += 1
         self.event_log.append(Event(
             tick=self.tick,
+            sequence_id=self._seq,
             event_type=event_type,
+            source="simulator",
             agent_id=agent_id,
             task_id=task_id,
-            data=data or {},
+            payload=data or {},
         ))
 
     def _get_agent(self, agent_id: Optional[str]) -> Optional[Agent]:
