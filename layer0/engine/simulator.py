@@ -7,12 +7,13 @@ from layer0.core.world import World, Cell
 from layer0.core.agent import Agent, AgentRole, AgentStatus
 from layer0.core.task import Task, TaskStatus, make_task
 from layer0.core.economy import Economy
+from layer0.core.policy import PolicyEngine
 from layer0.schemas.event import Event, EventType
 from layer0.schemas.state import StateSnapshot, AgentSnapshot, TaskSnapshot, EconomySnapshot
 
 
 class Simulator:
-    def __init__(self, seed: int = 42, world: Optional[World] = None):
+    def __init__(self, seed: int = 42, world: Optional[World] = None, policy: Optional[PolicyEngine] = None):
         self.seed = seed
         self.rng = random.Random(seed)
         self.tick = 0
@@ -20,6 +21,7 @@ class Simulator:
         self.agents: List[Agent] = []
         self.tasks: List[Task] = []
         self.economy = Economy()
+        self.policy = policy or PolicyEngine()
         self.event_log: List[Event] = []
         self.snapshots: List[StateSnapshot] = []
 
@@ -43,6 +45,8 @@ class Simulator:
         self.tick += 1
         if self.tick % 5 == 0:
             self.spawn_task()
+        policy_events = self.policy.apply(self.agents, self.tasks, self.tick)
+        self.event_log.extend(policy_events)
         self._run_auctions()
         self._move_agents()
         self._work_agents()
@@ -159,12 +163,16 @@ class Simulator:
             gini = sum(abs(b1 - b2) for b1 in balances for b2 in balances) / (2 * len(balances) ** 2 * mean_b)
         else:
             gini = 0.0
+        scores = self.policy.score(self.agents, self.tasks)
         return {
             "task_completion_rate": round(len(completed) / total, 2) if total else 0,
             "open_tasks": len([t for t in self.tasks if t.status == "open"]),
             "total_energy": round(sum(a.energy for a in self.agents), 1),
             "mean_balance": round(mean_b, 1),
             "gini": round(gini, 3),
+            "policy_efficiency": scores.get("efficiency", 0),
+            "policy_equality": scores.get("equality", 0),
+            "policy_violations": len(self.policy.violations),
         }
 
     def save_log(self, path: str = "logs/events.jsonl") -> None:
