@@ -26,16 +26,26 @@ def main():
 
     sim = Simulator(seed=42)
     agents = [
-        ("W1",  AgentRole.WORKER,    2,  2),
-        ("W2",  AgentRole.WORKER,    5,  5),
-        ("W3",  AgentRole.WORKER,   10,  3),
-        ("W4",  AgentRole.WORKER,   14,  8),
-        ("W5",  AgentRole.WORKER,    7, 14),
-        ("G1",  AgentRole.GUARDIAN, 15,  3),
-        ("G2",  AgentRole.GUARDIAN,  3, 16),
-        ("T1",  AgentRole.TRADER,    8,  8),
+        # Worker x 10 — グリッド全体に分散
+        ("W01", AgentRole.WORKER,   2,  2), ("W02", AgentRole.WORKER,   6,  2),
+        ("W03", AgentRole.WORKER,  11,  2), ("W04", AgentRole.WORKER,  16,  2),
+        ("W05", AgentRole.WORKER,   2,  8), ("W06", AgentRole.WORKER,   7,  7),
+        ("W07", AgentRole.WORKER,  13,  6), ("W08", AgentRole.WORKER,  17,  8),
+        ("W09", AgentRole.WORKER,   4, 14), ("W10", AgentRole.WORKER,  14, 15),
+        # Guardian x 3 — 外周パトロール
+        ("G1",  AgentRole.GUARDIAN,  3,  3),
+        ("G2",  AgentRole.GUARDIAN, 16,  3),
+        ("G3",  AgentRole.GUARDIAN,  3, 16),
+        # Trader x 3 — 中間エリア
+        ("T1",  AgentRole.TRADER,    6,  6),
+        ("T2",  AgentRole.TRADER,   13,  6),
+        ("T3",  AgentRole.TRADER,    9, 13),
+        # Observer x 2 — 対角担当
         ("O1",  AgentRole.OBSERVER,  3, 15),
+        ("O2",  AgentRole.OBSERVER, 15,  4),
+        # Governor x 2 — 中央 + 第2拠点スタート
         ("V1",  AgentRole.GOVERNOR, 10, 10),
+        ("V2",  AgentRole.GOVERNOR,  5,  5),
     ]
     for aid, role, x, y in agents:
         sim.add_agent(Agent(aid, role, x=x, y=y))
