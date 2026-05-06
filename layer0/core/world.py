@@ -31,6 +31,20 @@ class World:
     def in_bounds(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
 
+    def charger_positions(self) -> list:
+        return [(x, y)
+                for y in range(self.height)
+                for x in range(self.width)
+                if self.grid[y][x] == Cell.CHARGE]
+
+    def nearest_charger(self, x: int, y: int):
+        best, best_d = None, float("inf")
+        for cx, cy in self.charger_positions():
+            d = abs(cx - x) + abs(cy - y)
+            if d < best_d:
+                best, best_d = (cx, cy), d
+        return best
+
     @classmethod
     def default_layout(cls) -> "World":
         w = cls(20, 20)

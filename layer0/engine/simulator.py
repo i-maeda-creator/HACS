@@ -9,6 +9,7 @@ from layer0.core.task import Task, TaskStatus, make_task
 from layer0.core.economy import Economy
 from layer0.core.policy import PolicyEngine
 from layer0.core.safety import SafetyGate
+from layer0.core.ai import RoleAI, make_ai, GovernorAI
 from layer0.schemas.event import Event, EventType
 from layer0.schemas.state import StateSnapshot, AgentSnapshot, TaskSnapshot, EconomySnapshot
 
@@ -25,10 +26,15 @@ class Simulator:
         self.economy = Economy()
         self.policy = policy or PolicyEngine()
         self.safety = SafetyGate()
+        self._ai: Dict[str, RoleAI] = {}
+        self._role_counts: Dict[AgentRole, int] = {}
         self.event_log: List[Event] = []
         self.snapshots: List[StateSnapshot] = []
 
     def add_agent(self, agent: Agent) -> None:
+        idx = self._role_counts.get(agent.role, 0)
+        self._role_counts[agent.role] = idx + 1
+        self._ai[agent.agent_id] = make_ai(agent.role, index=idx)
         self.agents.append(agent)
 
     def spawn_task(self) -> Task:
@@ -48,11 +54,16 @@ class Simulator:
         self.tick += 1
         if self.tick % 5 == 0:
             self.spawn_task()
-        # Safety first — must run before Policy and Economy
+        # Safety first
         safety_events = self.safety.check(self.agents, self.tick)
         self.event_log.extend(safety_events)
+        # Policy
         policy_events = self.policy.apply(self.agents, self.tasks, self.tick)
         self.event_log.extend(policy_events)
+        # Role AI — 各エージェントの戦略決定
+        self._run_ai()
+        # Governor policy proposals
+        self._run_governor_proposals()
         self._run_auctions()
         self._move_agents()
         self._work_agents()
@@ -64,13 +75,38 @@ class Simulator:
     def run(self, ticks: int) -> List[StateSnapshot]:
         return [self.step() for _ in range(ticks)]
 
+    def _run_ai(self) -> None:
+        for agent in self.agents:
+            ai = self._ai.get(agent.agent_id)
+            if ai:
+                ai.decide(agent, self.world, self.tasks, self.agents, self.tick, self.rng)
+
+    def _run_governor_proposals(self) -> None:
+        scores = self.policy.score(self.agents, self.tasks)
+        gini = 1.0 - scores.get("equality", 1.0)
+        completion = scores.get("efficiency", 1.0)
+        for agent in self.agents:
+            if agent.role != AgentRole.GOVERNOR:
+                continue
+            ai = self._ai.get(agent.agent_id)
+            if not isinstance(ai, GovernorAI):
+                continue
+            proposal = ai.policy_proposal(self.tick, gini, completion)
+            if proposal:
+                self._emit(EventType.POLICY_CHANGED, agent_id=agent.agent_id,
+                           data={"proposal": proposal, "source": "governor"})
+
     def _run_auctions(self) -> None:
         open_tasks = [t for t in self.tasks if t.status == TaskStatus.OPEN]
         for task in open_tasks:
             task.bids.clear()
             for agent in self.agents:
                 if agent.status == AgentStatus.IDLE and agent.energy > task.energy_cost:
-                    bid = round(task.energy_cost + self.rng.uniform(0, 2), 1)
+                    ai = self._ai.get(agent.agent_id)
+                    bid_amount = ai.get_bid(task, agent, self.rng) if ai else None
+                    if bid_amount is None:
+                        continue
+                    bid = round(bid_amount, 1)
                     task.submit_bid(agent.agent_id, bid)
                     self._emit(EventType.BID_SUBMITTED, agent_id=agent.agent_id, task_id=task.task_id, data={"bid": bid})
             winner_id = task.resolve_auction()
