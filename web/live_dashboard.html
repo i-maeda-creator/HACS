@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HACS Live Dashboard</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0e1a;
+    color: #e0e8ff;
+    font-family: 'Segoe UI', monospace;
+    min-height: 100vh;
+  }
+  header {
+    background: linear-gradient(90deg, #0d1b3e, #1a2a5e);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border-bottom: 1px solid #2a3a6e;
+  }
+  header h1 { font-size: 1.4rem; color: #7eb8ff; letter-spacing: 2px; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #ff4444; transition: background 0.3s;
+  }
+  .status-dot.online { background: #44ff88; box-shadow: 0 0 8px #44ff88; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 2fr;
+    grid-template-rows: auto auto;
+    gap: 16px;
+    padding: 16px;
+    height: calc(100vh - 64px);
+  }
+
+  .card {
+    background: #111827;
+    border: 1px solid #1e2d50;
+    border-radius: 8px;
+    padding: 16px;
+    overflow: hidden;
+  }
+  .card h2 {
+    font-size: 0.75rem;
+    color: #6b7fa3;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 12px;
+  }
+
+  /* KPI カード */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .kpi-item {
+    background: #0d1b3e;
+    border-radius: 6px;
+    padding: 10px;
+    text-align: center;
+  }
+  .kpi-value { font-size: 1.8rem; font-weight: bold; color: #7eb8ff; }
+  .kpi-label { font-size: 0.65rem; color: #6b7fa3; margin-top: 2px; }
+
+  /* Topic 棒グラフ */
+  .topic-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 8px;
+  }
+  .topic-name { font-size: 0.72rem; color: #a0b4d8; width: 200px; flex-shrink: 0; }
+  .topic-bar-wrap { flex: 1; background: #0d1b3e; border-radius: 3px; height: 14px; }
+  .topic-bar { height: 14px; border-radius: 3px; transition: width 0.4s ease; min-width: 2px; }
+  .topic-count { font-size: 0.72rem; color: #7eb8ff; width: 36px; text-align: right; }
+
+  /* Event ログ */
+  .log-card { grid-column: 3; grid-row: 1 / 3; display: flex; flex-direction: column; }
+  .log-list {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 0.72rem;
+    line-height: 1.7;
+  }
+  .log-list::-webkit-scrollbar { width: 4px; }
+  .log-list::-webkit-scrollbar-thumb { background: #2a3a6e; border-radius: 2px; }
+  .log-entry {
+    display: flex;
+    gap: 8px;
+    padding: 3px 6px;
+    border-radius: 3px;
+    animation: fadein 0.3s ease;
+  }
+  .log-entry:hover { background: #1a2a4e; }
+  @keyframes fadein { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; } }
+  .log-tick  { color: #4a5a7a; width: 40px; flex-shrink: 0; }
+  .log-topic { color: #7eb8ff; width: 180px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-type  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* EventType 色 */
+  .et-TaskCreated    { color: #44ff88; }
+  .et-TaskAssigned   { color: #88ddff; }
+  .et-TaskCompleted  { color: #ffdd44; }
+  .et-BidSubmitted   { color: #ff88aa; }
+  .et-AgentMoved     { color: #aaaaff; }
+  .et-AgentCharged   { color: #44ffdd; }
+  .et-PolicyChanged  { color: #ff8844; }
+  .et-SafetyTriggered{ color: #ff4444; }
+  .et-default        { color: #8899bb; }
+
+  /* グリッドマップ */
+  .map-card { grid-column: 1; grid-row: 2; }
+  canvas#minimap { width: 100%; image-rendering: pixelated; }
+
+  /* 接続ボタン */
+  .conn-row { display: flex; gap: 10px; align-items: center; margin-top: auto; padding-top: 12px; }
+  button {
+    background: #1a3a6e;
+    color: #7eb8ff;
+    border: 1px solid #2a4a8e;
+    border-radius: 5px;
+    padding: 7px 18px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background 0.2s;
+  }
+  button:hover { background: #2a4a9e; }
+  button.danger { background: #3e1a1a; color: #ff8888; border-color: #6e2a2a; }
+  button.danger:hover { background: #5e2a2a; }
+  #conn-status { font-size: 0.75rem; color: #6b7fa3; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot" id="dot"></div>
+  <h1>HACS — LIVE DASHBOARD</h1>
+  <span id="header-status" style="font-size:0.8rem;color:#6b7fa3;margin-left:auto;">未接続</span>
+</header>
+
+<div class="grid">
+
+  <!-- KPI -->
+  <div class="card" style="grid-column:1;grid-row:1;">
+    <h2>KPI</h2>
+    <div class="kpi-grid">
+      <div class="kpi-item">
+        <div class="kpi-value" id="kpi-events">0</div>
+        <div class="kpi-label">Total Events</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-value" id="kpi-tasks">0</div>
+        <div class="kpi-label">Tasks Completed</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-value" id="kpi-bids">0</div>
+        <div class="kpi-label">Bids Submitted</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-value" id="kpi-tick">0</div>
+        <div class="kpi-label">Current Tick</div>
+      </div>
+    </div>
+    <div class="conn-row">
+      <button onclick="connectMQTT()">接続</button>
+      <button class="danger" onclick="disconnectMQTT()">切断</button>
+      <span id="conn-status">ws://localhost:9001</span>
+    </div>
+  </div>
+
+  <!-- Topic 統計 -->
+  <div class="card" style="grid-column:2;grid-row:1;">
+    <h2>Topic Flow</h2>
+    <div id="topic-chart"></div>
+  </div>
+
+  <!-- Event ログ -->
+  <div class="card log-card">
+    <h2>Event Stream</h2>
+    <div class="log-list" id="log-list"></div>
+  </div>
+
+  <!-- エージェントマップ -->
+  <div class="card map-card">
+    <h2>Agent Map (20×20)</h2>
+    <canvas id="minimap" width="200" height="200"></canvas>
+  </div>
+
+  <!-- Safety アラート -->
+  <div class="card" style="grid-column:2;grid-row:2;">
+    <h2>Safety / Policy Alerts</h2>
+    <div id="alert-list" style="font-size:0.75rem;line-height:2;overflow-y:auto;max-height:200px;"></div>
+  </div>
+
+</div>
+
+<script>
+const TOPIC_COLORS = {
+  'city/task/new':       '#44ff88',
+  'city/task/bid':       '#ff88aa',
+  'city/task/assigned':  '#88ddff',
+  'city/task/completed': '#ffdd44',
+  'agent/#':             '#aaaaff',
+  'city/policy/update':  '#ff8844',
+  'safety/alert':        '#ff4444',
+  'energy/#':            '#44ffdd',
+};
+
+const ET_COLOR = {
+  TaskCreated: '#44ff88', TaskAssigned: '#88ddff', TaskCompleted: '#ffdd44',
+  BidSubmitted: '#ff88aa', AgentMoved: '#aaaaff', AgentCharged: '#44ffdd',
+  PolicyChanged: '#ff8844', SafetyTriggered: '#ff4444',
+};
+
+let client = null;
+let stats = {
+  events: 0, tasks: 0, bids: 0, tick: 0,
+  topics: {},
+};
+let agentPositions = {};
+
+// ── ミニマップ ──────────────────────────────────────────────────
+const canvas = document.getElementById('minimap');
+const ctx = canvas.getContext('2d');
+function drawMap() {
+  ctx.fillStyle = '#0d1b3e';
+  ctx.fillRect(0, 0, 200, 200);
+  const cell = 10;
+  Object.values(agentPositions).forEach(a => {
+    ctx.fillStyle = a.color || '#7eb8ff';
+    ctx.beginPath();
+    ctx.arc(a.x * cell + cell/2, a.y * cell + cell/2, 3, 0, Math.PI*2);
+    ctx.fill();
+  });
+}
+setInterval(drawMap, 500);
+
+// ── MQTT 接続 ──────────────────────────────────────────────────
+function connectMQTT() {
+  if (client) client.end(true);
+  client = mqtt.connect('ws://localhost:9001', {
+    clientId: 'hacs_dashboard_' + Math.random().toString(16).slice(2,8),
+    reconnectPeriod: 2000,
+  });
+  client.on('connect', () => {
+    document.getElementById('dot').classList.add('online');
+    document.getElementById('header-status').textContent = '接続中 — Mosquitto ws://localhost:9001';
+    document.getElementById('conn-status').textContent = '接続中';
+    client.subscribe(['city/#', 'agent/#', 'energy/#', 'safety/#', 'network/#']);
+  });
+  client.on('disconnect', () => {
+    document.getElementById('dot').classList.remove('online');
+    document.getElementById('header-status').textContent = '切断';
+  });
+  client.on('message', (topic, payload) => {
+    try {
+      const msg = JSON.parse(payload.toString());
+      handleEvent(topic, msg);
+    } catch(e) {}
+  });
+}
+
+function disconnectMQTT() {
+  if (client) { client.end(true); client = null; }
+  document.getElementById('dot').classList.remove('online');
+  document.getElementById('header-status').textContent = '切断';
+  document.getElementById('conn-status').textContent = '未接続';
+}
+
+// ── イベント処理 ────────────────────────────────────────────────
+function handleEvent(topic, msg) {
+  stats.events++;
+  stats.tick = Math.max(stats.tick, msg.tick || 0);
+  stats.topics[topic] = (stats.topics[topic] || 0) + 1;
+
+  const etype = msg.event_type || '';
+  if (etype === 'TaskCompleted') stats.tasks++;
+  if (etype === 'BidSubmitted')  stats.bids++;
+  if (etype === 'AgentMoved' && msg.agent_id) {
+    const p = msg.payload || {};
+    const roleColor = { Worker:'#7eb8ff', Guardian:'#ff8888', Trader:'#ffdd44', Observer:'#44ffdd', Governor:'#ff88ff' };
+    agentPositions[msg.agent_id] = {
+      x: p.x || 0, y: p.y || 0,
+      color: roleColor[msg.role] || '#7eb8ff'
+    };
+  }
+
+  updateKPI();
+  updateTopicChart();
+  appendLog(topic, msg);
+  if (etype === 'SafetyTriggered' || etype === 'PolicyChanged') appendAlert(msg);
+}
+
+// ── UI 更新 ─────────────────────────────────────────────────────
+function updateKPI() {
+  document.getElementById('kpi-events').textContent = stats.events;
+  document.getElementById('kpi-tasks').textContent  = stats.tasks;
+  document.getElementById('kpi-bids').textContent   = stats.bids;
+  document.getElementById('kpi-tick').textContent   = stats.tick;
+}
+
+function updateTopicChart() {
+  const el = document.getElementById('topic-chart');
+  const sorted = Object.entries(stats.topics).sort((a,b) => b[1]-a[1]).slice(0,8);
+  const max = sorted[0]?.[1] || 1;
+  el.innerHTML = sorted.map(([t, n]) => {
+    const pct = Math.max(2, (n/max)*100);
+    const color = Object.entries(TOPIC_COLORS).find(([p])=>t.startsWith(p.replace('#','')))?.[1] || '#5566aa';
+    return `<div class="topic-row">
+      <span class="topic-name">${t}</span>
+      <div class="topic-bar-wrap"><div class="topic-bar" style="width:${pct}%;background:${color}"></div></div>
+      <span class="topic-count">${n}</span>
+    </div>`;
+  }).join('');
+}
+
+function appendLog(topic, msg) {
+  const el = document.getElementById('log-list');
+  const etype = msg.event_type || '?';
+  const color = ET_COLOR[etype] || '#8899bb';
+  const agent = msg.agent_id ? ` [${msg.agent_id}]` : '';
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  div.innerHTML = `
+    <span class="log-tick">t${msg.tick||0}</span>
+    <span class="log-topic">${topic}</span>
+    <span class="log-type" style="color:${color}">${etype}${agent}</span>`;
+  el.prepend(div);
+  if (el.children.length > 200) el.removeChild(el.lastChild);
+}
+
+function appendAlert(msg) {
+  const el = document.getElementById('alert-list');
+  const etype = msg.event_type || '?';
+  const rule = (msg.payload||{}).rule || '';
+  const color = etype === 'SafetyTriggered' ? '#ff4444' : '#ff8844';
+  const div = document.createElement('div');
+  div.style.color = color;
+  div.textContent = `t${msg.tick} ${etype} — ${rule} ${msg.agent_id||''}`;
+  el.prepend(div);
+  if (el.children.length > 50) el.removeChild(el.lastChild);
+}
+
+// 起動時に自動接続
+window.onload = () => connectMQTT();
+</script>
+</body>
+</html>
