@@ -56,9 +56,15 @@ class Simulator:
             self.spawn_task()
         # Safety first
         safety_events = self.safety.check(self.agents, self.tick)
+        for e in safety_events:
+            self._seq += 1
+            e.sequence_id = self._seq
         self.event_log.extend(safety_events)
         # Policy
         policy_events = self.policy.apply(self.agents, self.tasks, self.tick)
+        for e in policy_events:
+            self._seq += 1
+            e.sequence_id = self._seq
         self.event_log.extend(policy_events)
         # Role AI — 各エージェントの戦略決定
         self._run_ai()
@@ -117,7 +123,9 @@ class Simulator:
                     winner.status = AgentStatus.MOVING
                     winner.target_x = task.x
                     winner.target_y = task.y
-                    self._emit(EventType.TASK_ASSIGNED, agent_id=winner_id, task_id=task.task_id)
+                    winning_bid = next((b.amount for b in task.bids if b.agent_id == winner_id), 0)
+                    self._emit(EventType.TASK_ASSIGNED, agent_id=winner_id, task_id=task.task_id,
+                               data={"target_x": task.x, "target_y": task.y, "bid": winning_bid})
 
     def _move_agents(self) -> None:
         for agent in self.agents:
@@ -127,7 +135,8 @@ class Simulator:
             if self.world.is_passable(nx, ny):
                 agent.x, agent.y = nx, ny
                 agent.spend_energy(Agent.MOVE_COST)
-                self._emit(EventType.AGENT_MOVED, agent_id=agent.agent_id, data={"x": nx, "y": ny})
+                self._emit(EventType.AGENT_MOVED, agent_id=agent.agent_id,
+                           data={"x": nx, "y": ny, "energy": round(agent.energy, 1)})
             if agent.x == agent.target_x and agent.y == agent.target_y:
                 agent.status = AgentStatus.WORKING
 
@@ -145,7 +154,8 @@ class Simulator:
             task.status = TaskStatus.COMPLETED
             task.completed_tick = self.tick
             self.economy.pay_reward(agent.agent_id, task.reward, task.task_id, self.tick)
-            self._emit(EventType.TASK_COMPLETED, agent_id=agent.agent_id, task_id=task.task_id, data={"reward": net})
+            self._emit(EventType.TASK_COMPLETED, agent_id=agent.agent_id, task_id=task.task_id,
+                       data={"reward": net, "energy": round(agent.energy, 1), "balance": round(agent.balance, 1)})
             agent.assigned_task_id = None
             agent.target_x = None
             agent.target_y = None
