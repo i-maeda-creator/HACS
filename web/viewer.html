@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>HACS Layer0 — 3D Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a1a; color: #e0e0ff; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+
+  #canvas-container { width: 100vw; height: 100vh; }
+
+  /* HUD */
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+  }
+
+  /* タイトル */
+  #title {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    font-size: 18px; font-weight: bold; color: #88aaff;
+    text-shadow: 0 0 12px #4466ff;
+    letter-spacing: 2px;
+  }
+
+  /* KPI パネル */
+  #kpi {
+    position: absolute; top: 16px; right: 16px;
+    background: rgba(10,10,40,0.85);
+    border: 1px solid #334;
+    border-radius: 10px;
+    padding: 14px 18px;
+    min-width: 200px;
+    font-size: 13px;
+    line-height: 1.9;
+  }
+  #kpi h3 { color: #88aaff; font-size: 12px; letter-spacing: 1px; margin-bottom: 6px; }
+  .kpi-row { display: flex; justify-content: space-between; gap: 12px; }
+  .kpi-label { color: #8888aa; }
+  .kpi-val   { color: #ffffff; font-weight: bold; }
+
+  /* エージェント情報 */
+  #agent-panel {
+    position: absolute; top: 16px; left: 16px;
+    background: rgba(10,10,40,0.85);
+    border: 1px solid #334;
+    border-radius: 10px;
+    padding: 14px 18px;
+    min-width: 200px;
+    font-size: 12px;
+    line-height: 1.8;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  #agent-panel h3 { color: #88aaff; font-size: 12px; letter-spacing: 1px; margin-bottom: 6px; }
+  .agent-row { display: flex; gap: 8px; align-items: center; }
+  .agent-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .agent-name { width: 32px; color: #ccc; }
+  .bar-bg { flex: 1; background: #222; border-radius: 3px; height: 6px; }
+  .bar-fill { height: 6px; border-radius: 3px; transition: width 0.1s; }
+
+  /* コントロール */
+  #controls {
+    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 14px;
+    background: rgba(10,10,40,0.85);
+    border: 1px solid #334;
+    border-radius: 30px;
+    padding: 10px 24px;
+    pointer-events: all;
+  }
+  #controls button {
+    background: #223;
+    border: 1px solid #446;
+    color: #aaccff;
+    border-radius: 6px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.2s;
+  }
+  #controls button:hover { background: #334; }
+  #tick-display { color: #88aaff; font-size: 14px; min-width: 80px; text-align: center; }
+  #speed-label { color: #8888aa; font-size: 12px; }
+  #speed { width: 80px; accent-color: #4466ff; }
+
+  /* タイムライン */
+  #timeline-wrap {
+    position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+    width: 60vw;
+    pointer-events: all;
+  }
+  #timeline { width: 100%; accent-color: #4466ff; cursor: pointer; }
+
+  /* 凡例 */
+  #legend {
+    position: absolute; bottom: 130px; right: 16px;
+    background: rgba(10,10,40,0.85);
+    border: 1px solid #334;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 11px;
+    line-height: 2;
+  }
+  #legend h3 { color: #88aaff; font-size: 11px; margin-bottom: 4px; }
+  .leg-row { display: flex; align-items: center; gap: 8px; }
+  .leg-color { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+
+  /* 説明オーバーレイ */
+  #explain {
+    position: absolute; bottom: 140px; left: 16px;
+    background: rgba(10,10,40,0.75);
+    border: 1px solid #334;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 11px;
+    line-height: 1.8;
+    max-width: 220px;
+    color: #aaaacc;
+  }
+  #explain strong { color: #88aaff; }
+</style>
+</head>
+<body>
+<div id="canvas-container"></div>
+<div id="hud">
+  <div id="title">HACS — Home Autonomous Civilization System</div>
+
+  <div id="kpi">
+    <h3>▸ KPI</h3>
+    <div class="kpi-row"><span class="kpi-label">tick</span><span class="kpi-val" id="k-tick">—</span></div>
+    <div class="kpi-row"><span class="kpi-label">タスク成立率</span><span class="kpi-val" id="k-comp">—</span></div>
+    <div class="kpi-row"><span class="kpi-label">格差(Gini)</span><span class="kpi-val" id="k-gini">—</span></div>
+    <div class="kpi-row"><span class="kpi-label">オープンタスク</span><span class="kpi-val" id="k-open">—</span></div>
+    <div class="kpi-row"><span class="kpi-label">総エネルギー</span><span class="kpi-val" id="k-energy">—</span></div>
+    <div class="kpi-row"><span class="kpi-label">総残高(EC)</span><span class="kpi-val" id="k-balance">—</span></div>
+    <div class="kpi-row"><span class="kpi-label">取引数</span><span class="kpi-val" id="k-tx">—</span></div>
+    <div class="kpi-row"><span class="kpi-label">効率スコア</span><span class="kpi-val" id="k-eff">—</span></div>
+    <div class="kpi-row"><span class="kpi-label">平等スコア</span><span class="kpi-val" id="k-eq">—</span></div>
+  </div>
+
+  <div id="agent-panel">
+    <h3>▸ エージェント</h3>
+    <div id="agent-list"></div>
+  </div>
+
+  <div id="legend">
+    <h3>▸ 凡例</h3>
+    <div class="leg-row"><div class="leg-color" style="background:#2196F3"></div>Worker（作業員）</div>
+    <div class="leg-row"><div class="leg-color" style="background:#F44336"></div>Guardian（警備）</div>
+    <div class="leg-row"><div class="leg-color" style="background:#FF9800"></div>Trader（商人）</div>
+    <div class="leg-row"><div class="leg-color" style="background:#9C27B0"></div>Observer（観察）</div>
+    <div class="leg-row"><div class="leg-color" style="background:#795548"></div>Governor（統治）</div>
+    <div class="leg-row"><div class="leg-color" style="background:#FFD700;border-radius:50%"></div>Task（未着手）</div>
+    <div class="leg-row"><div class="leg-color" style="background:#FF6600;border-radius:50%"></div>Task（担当中）</div>
+    <div class="leg-row"><div class="leg-color" style="background:#2ecc71"></div>充電ステーション</div>
+  </div>
+
+  <div id="explain">
+    <strong>▸ HACSとは？</strong><br>
+    ロボット（エージェント）が自律的に<br>
+    タスクに入札し、報酬を得て生活する<br>
+    家庭スケールの<strong>文明シミュレーター</strong>。<br><br>
+    <strong>Energy Coin (EC)</strong> = 通貨<br>
+    1 EC = 1 Wh（エネルギー＝お金）
+  </div>
+
+  <div id="timeline-wrap">
+    <input type="range" id="timeline" min="0" value="0">
+  </div>
+
+  <div id="controls">
+    <button id="btn-play">▶ 再生</button>
+    <button id="btn-prev">◀</button>
+    <button id="btn-next">▶</button>
+    <span id="tick-display">tick 0</span>
+    <span id="speed-label">速度</span>
+    <input type="range" id="speed" min="1" max="20" value="6">
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ── 定数 ──────────────────────────────────────────────────────
+const ROLE_COLOR = {
+  Worker:   0x2196F3,
+  Guardian: 0xF44336,
+  Trader:   0xFF9800,
+  Observer: 0x9C27B0,
+  Governor: 0x795548,
+};
+const STATUS_SCALE = { idle: 1.0, moving: 1.1, working: 1.3, charging: 0.8 };
+const CELL_SZ = 1.2;
+
+// ── Three.js セットアップ ─────────────────────────────────────
+const container = document.getElementById('canvas-container');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a1a);
+scene.fog = new THREE.Fog(0x0a0a1a, 30, 80);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(12, 22, 28);
+camera.lookAt(12, 0, 10);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(12, 0, 10);
+
+// ── ライト ────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x334466, 2.0));
+const dirLight = new THREE.DirectionalLight(0xaabbff, 2.5);
+dirLight.position.set(15, 30, 20);
+dirLight.castShadow = true;
+scene.add(dirLight);
+
+// ── ワールドグリッド ──────────────────────────────────────────
+let worldData = null;
+let frames = [];
+let agentMeshes = {};
+let taskMeshes = {};
+let frameIdx = 0;
+let playing = false;
+let lastTime = 0;
+
+function buildWorld(world) {
+  // 床
+  const floorGeo = new THREE.PlaneGeometry(world.width * CELL_SZ, world.height * CELL_SZ);
+  const floorMat = new THREE.MeshLambertMaterial({ color: 0x111122 });
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set((world.width / 2 - 0.5) * CELL_SZ, -0.01, (world.height / 2 - 0.5) * CELL_SZ);
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  // グリッドライン
+  const grid = new THREE.GridHelper(world.width * CELL_SZ, world.width, 0x223344, 0x1a1a2e);
+  grid.position.set((world.width / 2 - 0.5) * CELL_SZ, 0, (world.height / 2 - 0.5) * CELL_SZ);
+  scene.add(grid);
+
+  // 特殊セル
+  for (const cell of world.cells) {
+    if (cell.type === 1) {
+      // 壁
+      const geo = new THREE.BoxGeometry(CELL_SZ, CELL_SZ * 1.5, CELL_SZ);
+      const mat = new THREE.MeshLambertMaterial({ color: 0x222244 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(cell.x * CELL_SZ, 0.75, cell.y * CELL_SZ);
+      mesh.castShadow = true;
+      scene.add(mesh);
+    } else if (cell.type === 2) {
+      // 充電ステーション
+      const geo = new THREE.CylinderGeometry(0.35, 0.45, 0.3, 8);
+      const mat = new THREE.MeshLambertMaterial({ color: 0x00cc66, emissive: 0x004422 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(cell.x * CELL_SZ, 0.15, cell.y * CELL_SZ);
+      scene.add(mesh);
+      // 光
+      const light = new THREE.PointLight(0x00ff88, 0.6, 4);
+      light.position.set(cell.x * CELL_SZ, 0.5, cell.y * CELL_SZ);
+      scene.add(light);
+    }
+  }
+}
+
+function buildAgents(firstFrame) {
+  for (const a of firstFrame.agents) {
+    const geo = new THREE.BoxGeometry(0.7, 0.9, 0.7);
+    const mat = new THREE.MeshLambertMaterial({ color: ROLE_COLOR[a.role] || 0xffffff });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+
+    // ラベル用スプライト
+    const label = makeLabel(a.id);
+    mesh.add(label);
+    label.position.set(0, 0.9, 0);
+
+    agentMeshes[a.id] = mesh;
+    scene.add(mesh);
+  }
+}
+
+function makeLabel(text) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128; canvas.height = 40;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.roundRect(2, 2, 124, 36, 6);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, 64, 28);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.8, 0.25, 1);
+  return sprite;
+}
+
+function buildTasks(firstFrame) {
+  for (const t of firstFrame.tasks) {
+    const mesh = makeTaskMesh(t.status);
+    mesh.position.set(t.x * CELL_SZ, 0.5, t.y * CELL_SZ);
+    taskMeshes[t.id] = mesh;
+    scene.add(mesh);
+  }
+}
+
+function makeTaskMesh(status) {
+  const color = status === 'open' ? 0xFFD700 : 0xFF6600;
+  const geo = new THREE.SphereGeometry(0.35, 12, 12);
+  const mat = new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.4 });
+  return new THREE.Mesh(geo, mat);
+}
+
+function applyFrame(frame) {
+  // エージェント更新
+  for (const a of frame.agents) {
+    let mesh = agentMeshes[a.id];
+    if (!mesh) {
+      const geo = new THREE.BoxGeometry(0.7, 0.9, 0.7);
+      const mat = new THREE.MeshLambertMaterial({ color: ROLE_COLOR[a.role] || 0xffffff });
+      mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      const label = makeLabel(a.id);
+      mesh.add(label);
+      label.position.set(0, 0.9, 0);
+      agentMeshes[a.id] = mesh;
+      scene.add(mesh);
+    }
+    mesh.position.x = a.x * CELL_SZ;
+    mesh.position.y = 0.45;
+    mesh.position.z = a.y * CELL_SZ;
+    const s = STATUS_SCALE[a.status] || 1.0;
+    mesh.scale.setScalar(s);
+    // エネルギーで明るさ
+    mesh.material.emissiveIntensity = (a.energy / 100) * 0.3;
+  }
+
+  // タスク更新
+  const activeIds = new Set(frame.tasks.map(t => t.id));
+  for (const [id, mesh] of Object.entries(taskMeshes)) {
+    mesh.visible = activeIds.has(id);
+  }
+  for (const t of frame.tasks) {
+    if (!taskMeshes[t.id]) {
+      const mesh = makeTaskMesh(t.status);
+      mesh.position.set(t.x * CELL_SZ, 0.5, t.y * CELL_SZ);
+      taskMeshes[t.id] = mesh;
+      scene.add(mesh);
+    } else {
+      taskMeshes[t.id].visible = true;
+      taskMeshes[t.id].material.color.setHex(t.status === 'open' ? 0xFFD700 : 0xFF6600);
+    }
+  }
+
+  // KPI 更新
+  const m = frame.metrics;
+  const e = frame.economy;
+  document.getElementById('k-tick').textContent    = frame.tick;
+  document.getElementById('k-comp').textContent    = (m.task_completion_rate * 100).toFixed(0) + '%';
+  document.getElementById('k-gini').textContent    = m.gini?.toFixed(3) ?? '—';
+  document.getElementById('k-open').textContent    = m.open_tasks ?? '—';
+  document.getElementById('k-energy').textContent  = e.total_energy;
+  document.getElementById('k-balance').textContent = e.total_balance + ' EC';
+  document.getElementById('k-tx').textContent      = e.transactions;
+  document.getElementById('k-eff').textContent     = m.policy_efficiency != null ? (m.policy_efficiency * 100).toFixed(0) + '%' : '—';
+  document.getElementById('k-eq').textContent      = m.policy_equality != null ? (m.policy_equality * 100).toFixed(0) + '%' : '—';
+  document.getElementById('tick-display').textContent = `tick ${frame.tick}`;
+  document.getElementById('timeline').value = frameIdx;
+
+  // エージェントパネル
+  const list = document.getElementById('agent-list');
+  list.innerHTML = '';
+  for (const a of frame.agents) {
+    const color = '#' + (ROLE_COLOR[a.role] || 0xffffff).toString(16).padStart(6, '0');
+    const row = document.createElement('div');
+    row.className = 'agent-row';
+    row.innerHTML = `
+      <div class="agent-dot" style="background:${color}"></div>
+      <div class="agent-name">${a.id}</div>
+      <div style="flex:1">
+        <div style="font-size:10px;color:#8888aa">${a.role} · ${a.status}</div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${a.energy}%;background:#4CAF50"></div></div>
+        <div style="font-size:10px;color:#aaaacc">${a.energy} EC energy / ${a.balance.toFixed(1)} EC</div>
+      </div>`;
+    list.appendChild(row);
+  }
+}
+
+// ── レンダーループ ────────────────────────────────────────────
+let floatT = 0;
+function animate(time) {
+  requestAnimationFrame(animate);
+  controls.update();
+  floatT += 0.015;
+
+  // タスクを浮遊
+  for (const mesh of Object.values(taskMeshes)) {
+    if (mesh.visible) mesh.position.y = 0.5 + Math.sin(floatT + mesh.position.x) * 0.12;
+  }
+
+  // 再生
+  if (playing && frames.length > 0) {
+    const speed = parseInt(document.getElementById('speed').value);
+    const interval = Math.max(50, 600 - speed * 28);
+    if (time - lastTime > interval) {
+      frameIdx = (frameIdx + 1) % frames.length;
+      applyFrame(frames[frameIdx]);
+      lastTime = time;
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+// ── コントロール ──────────────────────────────────────────────
+document.getElementById('btn-play').addEventListener('click', () => {
+  playing = !playing;
+  document.getElementById('btn-play').textContent = playing ? '⏸ 停止' : '▶ 再生';
+});
+document.getElementById('btn-prev').addEventListener('click', () => {
+  frameIdx = Math.max(0, frameIdx - 1);
+  applyFrame(frames[frameIdx]);
+});
+document.getElementById('btn-next').addEventListener('click', () => {
+  frameIdx = Math.min(frames.length - 1, frameIdx + 1);
+  applyFrame(frames[frameIdx]);
+});
+document.getElementById('timeline').addEventListener('input', e => {
+  frameIdx = parseInt(e.target.value);
+  applyFrame(frames[frameIdx]);
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ── データ読み込み ────────────────────────────────────────────
+fetch('replay.json')
+  .then(r => r.json())
+  .then(data => {
+    worldData = data.world;
+    frames = data.frames;
+    document.getElementById('timeline').max = frames.length - 1;
+    buildWorld(worldData);
+    if (frames.length > 0) {
+      buildAgents(frames[0]);
+      buildTasks(frames[0]);
+      applyFrame(frames[0]);
+    }
+    animate(0);
+    playing = true;
+    document.getElementById('btn-play').textContent = '⏸ 停止';
+  })
+  .catch(() => {
+    // replay.json がない場合のデモ
+    alert('replay.json が見つかりません。\nmain_full.py を実行してから開いてください。');
+    animate(0);
+  });
+</script>
+</body>
+</html>

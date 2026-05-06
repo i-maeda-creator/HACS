@@ -6,6 +6,8 @@ from layer0.core.agent import Agent, AgentRole
 from layer0.core.policy import PolicyEngine
 from layer0.renderer.matplotlib_renderer import MatplotlibRenderer
 from layer0.renderer.kpi_dashboard import show_dashboard
+from layer0.export.web_exporter import export_for_web
+from layer0.export.video_exporter import export_gif
 
 AGENTS = [
     ("W1",  AgentRole.WORKER,   2,  2),
@@ -49,6 +51,18 @@ def main():
     for k, v in scores.items():
         print(f"  {k}: {v}")
     print(f"  violations: {len(sim.policy.violations)}")
+
+    # Web 3D ビューアー用 JSON 生成
+    print("\nWeb リプレイデータを生成中...")
+    export_for_web(sim.world, sim.snapshots, "web/replay.json")
+
+    # 解説 GIF 生成
+    print("解説 GIF を生成中（少し時間がかかります）...")
+    export_gif(sim.world, sim.snapshots, "web/hacs_demo.gif", every=2, fps=8)
+
+    print("\n完了！")
+    print("  3D ビューアー → web/viewer.html をブラウザで開いてください")
+    print("  解説 GIF     → web/hacs_demo.gif")
 
     show_dashboard(sim.snapshots, title="HACS KPI Dashboard")
 
