@@ -2,6 +2,13 @@ from __future__ import annotations
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+
+# Windows 日本語フォントを設定
+for fname in ["Yu Gothic", "Meiryo", "MS Gothic", "IPAexGothic"]:
+    if any(fname.lower() in f.name.lower() for f in fm.fontManager.ttflist):
+        matplotlib.rcParams["font.family"] = fname
+        break
 import matplotlib.patches as mpatches
 import matplotlib.gridspec as gridspec
 import numpy as np
