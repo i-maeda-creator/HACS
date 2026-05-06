@@ -40,18 +40,26 @@ def main():
     for aid, role, x, y in agents:
         sim.add_agent(Agent(aid, role, x=x, y=y))
 
+    import json
     for tick in range(1, TICKS + 1):
         prev = len(sim.event_log)
-        sim.step()
+        snap = sim.step()
         new_events = sim.event_log[prev:]
         for event in new_events:
             bus.publish_event(event)
 
+        # スナップショット + policy_params を live_viewer へ送信
+        snap_dict = json.loads(snap.model_dump_json())
+        snap_dict["policy_params"] = dict(sim.policy_params)
+        bus._client.publish("hacs/snapshot", json.dumps(snap_dict))
+
         if tick % 10 == 0:
             scores = sim.policy.score(sim.agents, sim.tasks)
+            pp = sim.policy_params
             print(f"  tick {tick:3d} | events={len(sim.event_log):4d} | "
                   f"eff={scores.get('efficiency',0):.2f} | "
-                  f"eq={scores.get('equality',0):.2f}")
+                  f"eq={scores.get('equality',0):.2f} | "
+                  f"wb={pp['worker_bid_bonus']:.2f} rm={pp['reward_multiplier']:.2f}")
 
         time.sleep(TICK_INTERVAL)
 

@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>HACS Live Viewer</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0a12; color:#e0e0e0; font-family:'Segoe UI',monospace; display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+
+  /* ── Header ── */
+  header { background:#111122; border-bottom:1px solid #2a2a4a; padding:8px 16px; display:flex; align-items:center; gap:16px; flex-shrink:0; }
+  header h1 { font-size:14px; font-weight:700; color:#00e5ff; letter-spacing:2px; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; }
+  .badge-ok   { background:#00400030; color:#00e676; border:1px solid #00e67640; }
+  .badge-warn { background:#ff6d0030; color:#ff6d00; border:1px solid #ff6d0040; }
+  .badge-crit { background:#ff000030; color:#ff4444; border:1px solid #ff444440; }
+  #tick-label { margin-left:auto; font-size:12px; color:#888; }
+
+  /* ── Main layout ── */
+  main { display:flex; flex:1; overflow:hidden; gap:0; }
+
+  /* ── Grid canvas panel ── */
+  #canvas-panel { flex:0 0 auto; padding:12px; display:flex; align-items:center; justify-content:center; }
+  canvas { image-rendering:pixelated; border:1px solid #2a2a4a; border-radius:4px; }
+
+  /* ── Right panel ── */
+  #right { flex:1; display:flex; flex-direction:column; overflow:hidden; border-left:1px solid #1a1a2e; }
+
+  /* ── KPI row ── */
+  #kpi-row { display:flex; gap:1px; background:#0a0a12; flex-shrink:0; }
+  .kpi { flex:1; background:#111122; padding:8px 10px; border-bottom:1px solid #1a1a2e; }
+  .kpi-label { font-size:9px; color:#555; text-transform:uppercase; letter-spacing:1px; }
+  .kpi-val { font-size:16px; font-weight:700; margin-top:2px; }
+
+  /* ── Policy params ── */
+  #policy-bar { background:#0d0d1f; border-bottom:1px solid #1a1a2e; padding:6px 12px; display:flex; gap:20px; flex-shrink:0; font-size:11px; }
+  .pp-item { display:flex; flex-direction:column; }
+  .pp-label { font-size:9px; color:#555; text-transform:uppercase; }
+  .pp-val { color:#aa00ff; font-weight:700; }
+
+  /* ── Agent table ── */
+  #agent-panel { flex:1; overflow-y:auto; padding:8px; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th { color:#555; font-weight:600; text-align:left; padding:3px 6px; border-bottom:1px solid #1a1a2e; position:sticky; top:0; background:#0a0a12; }
+  td { padding:3px 6px; border-bottom:1px solid #111122; }
+  tr:hover td { background:#111122; }
+  .energy-bar { height:6px; border-radius:3px; background:#1a1a2e; overflow:hidden; width:60px; }
+  .energy-fill { height:100%; border-radius:3px; transition:width 0.2s; }
+
+  /* ── Event log ── */
+  #event-panel { height:140px; flex-shrink:0; border-top:1px solid #1a1a2e; overflow-y:auto; padding:4px 8px; }
+  .ev-line { font-size:10px; color:#666; padding:1px 0; white-space:nowrap; }
+  .ev-line.ev-assigned  { color:#00e676; }
+  .ev-line.ev-completed { color:#00b0ff; }
+  .ev-line.ev-safety    { color:#ff4444; }
+  .ev-line.ev-policy    { color:#aa00ff; }
+  .ev-line.ev-bid       { color:#ff6d00; }
+
+  /* ── Bottom bar ── */
+  #bottom-bar { background:#111122; border-top:1px solid #2a2a4a; padding:4px 12px; font-size:10px; color:#444; display:flex; gap:16px; flex-shrink:0; }
+  #conn-status { color:#ff4444; }
+  #conn-status.connected { color:#00e676; }
+
+  /* ── Legend ── */
+  .legend { display:flex; gap:10px; margin-left:auto; font-size:10px; }
+  .lg { display:flex; align-items:center; gap:4px; }
+  .lg-dot { width:10px; height:10px; border-radius:50%; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>HACS LIVE VIEWER</h1>
+  <span id="el-badge" class="badge badge-ok">NORMAL</span>
+  <span id="tick-label">tick: 0</span>
+</header>
+
+<main>
+  <!-- Grid -->
+  <div id="canvas-panel">
+    <canvas id="world" width="420" height="420"></canvas>
+  </div>
+
+  <!-- Right -->
+  <div id="right">
+    <!-- KPI -->
+    <div id="kpi-row">
+      <div class="kpi"><div class="kpi-label">効率性</div><div class="kpi-val" id="k-eff" style="color:#00e676">-</div></div>
+      <div class="kpi"><div class="kpi-label">平等性</div><div class="kpi-val" id="k-eq"  style="color:#00b0ff">-</div></div>
+      <div class="kpi"><div class="kpi-label">Gini</div><div class="kpi-val"   id="k-gini"style="color:#ff6d00">-</div></div>
+      <div class="kpi"><div class="kpi-label">総残高</div><div class="kpi-val" id="k-bal" style="color:#ffd600">-</div></div>
+      <div class="kpi"><div class="kpi-label">イベント</div><div class="kpi-val" id="k-ev" style="color:#888">-</div></div>
+    </div>
+
+    <!-- Policy params -->
+    <div id="policy-bar">
+      <div class="pp-item"><span class="pp-label">報酬倍率</span><span class="pp-val" id="pp-rm">1.00x</span></div>
+      <div class="pp-item"><span class="pp-label">税率</span>      <span class="pp-val" id="pp-tr">5.0%</span></div>
+      <div class="pp-item"><span class="pp-label">Worker ボーナス</span><span class="pp-val" id="pp-wb">0.00</span></div>
+      <div class="pp-item" style="margin-left:auto;font-size:10px;color:#333">Governor 提案 → 実効中</div>
+    </div>
+
+    <!-- Agent table -->
+    <div id="agent-panel">
+      <table>
+        <thead><tr>
+          <th>ID</th><th>役職</th><th>状態</th><th>座標</th><th>Energy</th><th>残高</th>
+        </tr></thead>
+        <tbody id="agent-tbody"></tbody>
+      </table>
+    </div>
+
+    <!-- Event log -->
+    <div id="event-panel" id="evt-panel"></div>
+  </div>
+</main>
+
+<div id="bottom-bar">
+  <span id="conn-status">● CONNECTING…</span>
+  <span id="broker-url">ws://localhost:9001</span>
+  <div class="legend">
+    <div class="lg"><div class="lg-dot" style="background:#00e676"></div>Worker</div>
+    <div class="lg"><div class="lg-dot" style="background:#ff6d00"></div>Trader</div>
+    <div class="lg"><div class="lg-dot" style="background:#ff4444"></div>Guardian</div>
+    <div class="lg"><div class="lg-dot" style="background:#00b0ff"></div>Observer</div>
+    <div class="lg"><div class="lg-dot" style="background:#aa00ff"></div>Governor</div>
+    <div class="lg"><div class="lg-dot" style="background:#ffd600;border-radius:2px"></div>Task</div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script>
+// ══════════════════════════════════════════════════════════════
+// 定数・設定
+// ══════════════════════════════════════════════════════════════
+const GRID = 20;
+const CELL = 420 / GRID;  // 21px/cell
+const BROKER = "ws://localhost:9001/mqtt";
+
+const ROLE_COLOR = {
+  Worker:   "#00e676", Trader:   "#ff6d00",
+  Guardian: "#ff4444", Observer: "#00b0ff",
+  Governor: "#aa00ff",
+};
+const STATUS_ALPHA = { idle:"cc", moving:"ff", working:"ff", charging:"ff" };
+
+// ── World map (20×20 default layout) ──────────────────────────
+// W=wall, C=charger, .=floor
+const WORLD_MAP = [
+  "WWWWWWWWWWWWWWWWWWWW",
+  "W..................W",
+  "W.WWWW.....WWWW...W",
+  "W.W....C...W.....CW",
+  "W.W.WWWW...W.WWWW.W",
+  "W..........C.......W",  // note: kept simple — real layout from sim
+  "W.WWWW.....WWWW...W",
+  "W.W....C...W......W",
+  "W.W.WWWW...W.WWWW.W",
+  "W..................W",
+  "WC.................W",
+  "W..................W",
+  "W.WWWW.....WWWW...W",
+  "W.W....C...W......W",
+  "W.W.WWWW...W.WWWW.W",
+  "W..........C.......W",
+  "W.WWWW.....WWWW...W",
+  "W.W....C...W.....CW",
+  "W.W.WWWW...W.WWWW.W",
+  "WWWWWWWWWWWWWWWWWWWW",
+];
+
+// ══════════════════════════════════════════════════════════════
+// 状態
+// ══════════════════════════════════════════════════════════════
+let state = {
+  tick: 0, agents: {}, tasks: {}, metrics: {},
+  policy_params: { reward_multiplier:1.0, tax_rate:0.05, worker_bid_bonus:0.0 },
+  events: [], eventCount: 0,
+};
+let anim = {};  // agent_id -> {sx,sy,tx,ty,progress}
+
+// ══════════════════════════════════════════════════════════════
+// Canvas レンダリング
+// ══════════════════════════════════════════════════════════════
+const canvas = document.getElementById("world");
+const ctx = canvas.getContext("2d");
+
+function drawWorld() {
+  // background
+  ctx.fillStyle = "#0a0a12";
+  ctx.fillRect(0, 0, 420, 420);
+
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      const ch = (WORLD_MAP[y] || "")[x] || "W";
+      if (ch === "W") {
+        ctx.fillStyle = "#1a1a2e";
+        ctx.fillRect(x*CELL, y*CELL, CELL, CELL);
+      } else if (ch === "C") {
+        ctx.fillStyle = "#0d2030";
+        ctx.fillRect(x*CELL, y*CELL, CELL, CELL);
+        ctx.fillStyle = "#ffd60030";
+        ctx.fillRect(x*CELL+2, y*CELL+2, CELL-4, CELL-4);
+        // lightning bolt
+        ctx.fillStyle = "#ffd600";
+        ctx.font = "10px monospace";
+        ctx.textAlign="center"; ctx.textBaseline="middle";
+        ctx.fillText("⚡", x*CELL + CELL/2, y*CELL + CELL/2);
+      }
+    }
+  }
+
+  // grid lines (subtle)
+  ctx.strokeStyle = "#ffffff08";
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= GRID; i++) {
+    ctx.beginPath(); ctx.moveTo(i*CELL, 0); ctx.lineTo(i*CELL, 420); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i*CELL); ctx.lineTo(420, i*CELL); ctx.stroke();
+  }
+}
+
+function drawTasks() {
+  for (const t of Object.values(state.tasks)) {
+    if (t.status === "completed") continue;
+    const cx = t.x * CELL + CELL/2;
+    const cy = t.y * CELL + CELL/2;
+    const r = CELL * 0.28;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(Math.PI/4);
+    ctx.fillStyle = t.status === "assigned" ? "#ffd60066" : "#ffd600aa";
+    ctx.fillRect(-r, -r, r*2, r*2);
+    ctx.restore();
+    // reward text
+    ctx.fillStyle = "#ffd600";
+    ctx.font = "bold 7px monospace";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(t.reward.toFixed(0), cx, cy);
+  }
+}
+
+function drawAgents() {
+  for (const [id, a] of Object.entries(state.tasks)) void 0;  // skip
+
+  for (const [id, a] of Object.entries(state.agents)) {
+    const an = anim[id];
+    let dx = a.x, dy = a.y;
+    if (an && an.progress < 1) {
+      dx = an.sx + (an.tx - an.sx) * an.progress;
+      dy = an.sy + (an.ty - an.sy) * an.progress;
+    }
+    const cx = dx * CELL + CELL/2;
+    const cy = dy * CELL + CELL/2;
+    const r = CELL * 0.35;
+    const col = ROLE_COLOR[a.role] || "#ffffff";
+
+    // glow
+    const grad = ctx.createRadialGradient(cx, cy, r*0.2, cx, cy, r*1.4);
+    grad.addColorStop(0, col + "44");
+    grad.addColorStop(1, col + "00");
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, cy, r*1.4, 0, Math.PI*2); ctx.fill();
+
+    // circle
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2);
+    ctx.fillStyle = col + "cc";
+    ctx.fill();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = a.status === "working" ? 2 : 1;
+    ctx.stroke();
+
+    // energy ring
+    const energyAngle = (a.energy / 100) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 2.5, -Math.PI/2, -Math.PI/2 + energyAngle);
+    ctx.strokeStyle = a.energy < 20 ? "#ff4444" : "#00e676";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // label
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 7px monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(id.slice(0, 3), cx, cy);
+  }
+}
+
+function render() {
+  drawWorld();
+  drawTasks();
+  drawAgents();
+}
+
+// ══════════════════════════════════════════════════════════════
+// アニメーション
+// ══════════════════════════════════════════════════════════════
+function tickAnim() {
+  let needRender = false;
+  for (const [id, an] of Object.entries(anim)) {
+    if (an.progress < 1) {
+      an.progress = Math.min(1, an.progress + 0.08);
+      needRender = true;
+    }
+  }
+  if (needRender) render();
+  requestAnimationFrame(tickAnim);
+}
+requestAnimationFrame(tickAnim);
+
+// ══════════════════════════════════════════════════════════════
+// UI 更新
+// ══════════════════════════════════════════════════════════════
+function updateKPI() {
+  const m = state.metrics;
+  document.getElementById("k-eff").textContent  = (m.policy_efficiency || 0).toFixed(3);
+  document.getElementById("k-eq").textContent   = (m.policy_equality   || 0).toFixed(3);
+  document.getElementById("k-gini").textContent = (m.gini              || 0).toFixed(3);
+  document.getElementById("k-bal").textContent  = (m.mean_balance      || 0).toFixed(1) + " EC";
+  document.getElementById("k-ev").textContent   = state.eventCount;
+  document.getElementById("tick-label").textContent = "tick: " + state.tick;
+}
+
+function updatePolicyBar() {
+  const pp = state.policy_params;
+  document.getElementById("pp-rm").textContent = pp.reward_multiplier.toFixed(2) + "x";
+  document.getElementById("pp-tr").textContent = (pp.tax_rate * 100).toFixed(1) + "%";
+  document.getElementById("pp-wb").textContent = pp.worker_bid_bonus.toFixed(2);
+
+  // color flash when non-default
+  document.getElementById("pp-rm").style.color = pp.reward_multiplier > 1.01 ? "#ffd600" : "#aa00ff";
+  document.getElementById("pp-tr").style.color = pp.tax_rate > 0.051         ? "#ff4444" : "#aa00ff";
+  document.getElementById("pp-wb").style.color = pp.worker_bid_bonus > 0.01  ? "#00e676" : "#aa00ff";
+}
+
+function updateAgentTable() {
+  const tbody = document.getElementById("agent-tbody");
+  tbody.innerHTML = "";
+  for (const a of Object.values(state.agents).sort((a,b) => a.agent_id < b.agent_id ? -1 : 1)) {
+    const col = ROLE_COLOR[a.role] || "#fff";
+    const ePct = Math.round(a.energy);
+    const eColor = ePct < 20 ? "#ff4444" : ePct < 40 ? "#ff6d00" : "#00e676";
+    tbody.innerHTML += `
+      <tr>
+        <td style="color:${col};font-weight:700">${a.agent_id}</td>
+        <td style="color:${col}60">${a.role}</td>
+        <td style="color:#888;font-size:9px">${a.status}</td>
+        <td style="color:#555">(${a.x},${a.y})</td>
+        <td>
+          <div class="energy-bar">
+            <div class="energy-fill" style="width:${ePct}%;background:${eColor}"></div>
+          </div>
+        </td>
+        <td style="color:#ffd600">${a.balance.toFixed(1)}</td>
+      </tr>`;
+  }
+}
+
+function addEventLine(type, text) {
+  const panel = document.getElementById("event-panel");
+  const cls = {
+    TaskAssigned: "ev-assigned", TaskCompleted: "ev-completed",
+    SafetyTriggered: "ev-safety", PolicyChanged: "ev-policy",
+    BidSubmitted: "ev-bid",
+  }[type] || "";
+  const div = document.createElement("div");
+  div.className = "ev-line " + cls;
+  div.textContent = `[${state.tick}] ${type}: ${text}`;
+  panel.prepend(div);
+  while (panel.children.length > 80) panel.removeChild(panel.lastChild);
+}
+
+function updateEmergencyBadge(level) {
+  const el = document.getElementById("el-badge");
+  if (level === 0) { el.textContent = "NORMAL"; el.className = "badge badge-ok"; }
+  else if (level <= 2) { el.textContent = "WARNING"; el.className = "badge badge-warn"; }
+  else { el.textContent = "EMERGENCY"; el.className = "badge badge-crit"; }
+}
+
+// ══════════════════════════════════════════════════════════════
+// MQTT
+// ══════════════════════════════════════════════════════════════
+const client = mqtt.connect(BROKER, { reconnectPeriod: 2000, keepalive: 30 });
+const connEl = document.getElementById("conn-status");
+
+client.on("connect", () => {
+  connEl.textContent = "● CONNECTED";
+  connEl.className = "connected";
+  client.subscribe("city/#");
+  client.subscribe("agent/#");
+  client.subscribe("safety/#");
+});
+
+client.on("error",      () => { connEl.textContent = "● ERROR";        connEl.className = ""; });
+client.on("offline",    () => { connEl.textContent = "● OFFLINE";      connEl.className = ""; });
+client.on("reconnect",  () => { connEl.textContent = "● RECONNECTING"; connEl.className = ""; });
+
+client.on("message", (topic, payload) => {
+  let data;
+  try { data = JSON.parse(payload.toString()); } catch { return; }
+
+  state.eventCount++;
+  const ev = data;
+  const t = ev.event_type || "";
+  const p = ev.payload || {};
+
+  if (t === "AgentMoved" && ev.agent_id) {
+    const prev = state.agents[ev.agent_id];
+    if (prev) {
+      anim[ev.agent_id] = { sx: prev.x, sy: prev.y, tx: p.x, ty: p.y, progress: 0 };
+      prev.x = p.x; prev.y = p.y;
+      prev.energy = p.energy !== undefined ? p.energy : prev.energy;
+    }
+    state.tick = ev.tick;
+
+  } else if (t === "TaskCreated") {
+    state.tasks[ev.task_id] = { task_id: ev.task_id, x: p.x, y: p.y,
+                                 reward: p.reward, status: "open" };
+
+  } else if (t === "TaskAssigned") {
+    if (state.tasks[ev.task_id]) state.tasks[ev.task_id].status = "assigned";
+    addEventLine(t, `${ev.agent_id} -> task(${p.target_x},${p.target_y}) bid=${p.bid}`);
+
+  } else if (t === "TaskCompleted") {
+    if (state.tasks[ev.task_id]) state.tasks[ev.task_id].status = "completed";
+    if (state.agents[ev.agent_id]) {
+      state.agents[ev.agent_id].balance = p.balance;
+      state.agents[ev.agent_id].energy  = p.energy;
+    }
+    addEventLine(t, `${ev.agent_id} +${p.reward.toFixed(1)} EC`);
+
+  } else if (t === "AgentCharged") {
+    if (state.agents[ev.agent_id]) state.agents[ev.agent_id].energy = p.energy;
+
+  } else if (t === "SafetyTriggered") {
+    addEventLine(t, `${ev.agent_id || "?"} ${p.rule} [${p.severity}]`);
+
+  } else if (t === "PolicyChanged" && p.source === "governor") {
+    const prop = p.proposal || {};
+    addEventLine(t, `${prop.action} — ${prop.reason || ""}`);
+    // policy_params 更新
+    if (p.params_after) state.policy_params = p.params_after;
+    updatePolicyBar();
+    updateEmergencyBadge(0);
+
+  } else if (t === "BidSubmitted") {
+    // bid は頻繁すぎるのでログは省略
+  }
+
+  // スナップショット: hacs/snapshot トピックで全状態を受け取る
+  if (topic === "hacs/snapshot") {
+    applySnapshot(data);
+    return;
+  }
+
+  updateKPI();
+  updateAgentTable();
+  render();
+});
+
+function applySnapshot(snap) {
+  state.tick = snap.tick;
+  state.metrics = snap.metrics || {};
+  state.policy_params = snap.policy_params || state.policy_params;
+  // agents
+  for (const a of snap.agents || []) {
+    if (!state.agents[a.agent_id]) {
+      state.agents[a.agent_id] = a;
+    } else {
+      Object.assign(state.agents[a.agent_id], a);
+    }
+  }
+  // tasks
+  for (const t of snap.tasks || []) {
+    state.tasks[t.task_id] = t;
+  }
+  updateKPI();
+  updatePolicyBar();
+  updateAgentTable();
+  render();
+}
+
+// ══════════════════════════════════════════════════════════════
+// Snapshot ポーリング (MQTT が繋がらない場合の fallback)
+// ══════════════════════════════════════════════════════════════
+async function pollSnapshot() {
+  try {
+    const r = await fetch("replay.json");
+    if (!r.ok) return;
+    const snaps = await r.json();
+    if (!Array.isArray(snaps) || snaps.length === 0) return;
+    const snap = snaps[snaps.length - 1];
+    applySnapshot(snap);
+  } catch {}
+}
+// 最初だけ replay.json を読み込んで初期状態を表示
+pollSnapshot();
+</script>
+</body>
+</html>

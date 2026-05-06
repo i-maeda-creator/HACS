@@ -1,6 +1,6 @@
 from __future__ import annotations
 import random
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 if TYPE_CHECKING:
     from layer0.core.agent import Agent
@@ -34,11 +34,21 @@ class RoleAI:
 
 # ── Worker ──────────────────────────────────────────────────────
 class WorkerAI(RoleAI):
-    """近くの高報酬タスクを優先して効率よく稼ぐ。"""
+    """近くの高報酬タスクを優先し、sector 熱量マップで入札を最適化する。"""
 
     CHARGE_THRESHOLD = 30.0
 
+    def __init__(self):
+        # sector (x//5, y//5) ごとの報酬 EMA — 学習で蓄積
+        self._sector_avg: dict = {}
+
     def decide(self, agent, world, tasks, agents, tick, rng):
+        # 可視タスクから sector 報酬を学習
+        for t in tasks:
+            if hasattr(t, 'status') and t.status.value == 'open':
+                key = (t.x // 5, t.y // 5)
+                prior = self._sector_avg.get(key, t.reward)
+                self._sector_avg[key] = prior * 0.85 + t.reward * 0.15
         if agent.status == AgentStatus.IDLE and agent.energy < self.CHARGE_THRESHOLD:
             self._go_charge(agent, world)
 
@@ -46,8 +56,12 @@ class WorkerAI(RoleAI):
         if agent.energy < 15:
             return None
         dist = abs(task.x - agent.x) + abs(task.y - agent.y)
-        # 高報酬ほど積極的に、遠いほど控えめに (最高値入札が勝つ正オークション)
-        bid = task.reward * rng.uniform(0.6, 1.0) - dist * 0.15
+        # 学習済み sector 平均と比較して相対的な価値を評価
+        key = (task.x // 5, task.y // 5)
+        sector_avg = self._sector_avg.get(key, task.reward)
+        value_ratio = min(1.4, task.reward / max(1.0, sector_avg))
+        enthusiasm = rng.uniform(0.55, 0.95) * value_ratio
+        bid = task.reward * enthusiasm - dist * 0.15
         return round(max(task.energy_cost + 0.1, bid), 1)
 
 
@@ -94,22 +108,32 @@ class GuardianAI(RoleAI):
 
 # ── Trader ──────────────────────────────────────────────────────
 class TraderAI(RoleAI):
-    """高報酬タスクを選別して利益を最大化する商人。"""
+    """市場平均を学習しながら高マージンタスクを選別する商人。"""
 
-    MIN_REWARD = 10.0    # 最低報酬ライン
-    MIN_MARGIN = 3.0     # 最低利益マージン
+    MIN_REWARD = 10.0
+    MIN_MARGIN = 3.0
+
+    def __init__(self):
+        self._market_avg = 14.0   # 市場平均報酬の EMA
+        self._adaptive_min = self.MIN_REWARD  # 動的最低報酬閾値
 
     def decide(self, agent, world, tasks, agents, tick, rng):
+        # 市場平均を学習してフィルタ閾値を動的調整
+        open_tasks = [t for t in tasks if hasattr(t, 'status') and t.status.value == 'open']
+        if open_tasks:
+            avg = sum(t.reward for t in open_tasks) / len(open_tasks)
+            self._market_avg = self._market_avg * 0.9 + avg * 0.1
+            # 市場平均の 70% 以上のタスクのみ狙う
+            self._adaptive_min = max(self.MIN_REWARD, self._market_avg * 0.70)
         if agent.status == AgentStatus.IDLE and agent.energy < 25:
             self._go_charge(agent, world)
 
     def get_bid(self, task, agent, rng):
-        if task.reward < self.MIN_REWARD:
+        if task.reward < self._adaptive_min:
             return None
         margin = task.reward - task.energy_cost
         if margin < self.MIN_MARGIN:
             return None
-        # 選別したタスクには強気で入札 - Workerの最大入札を超えるレンジ
         bid = task.energy_cost + margin * rng.uniform(0.65, 0.95)
         return round(bid, 1)
 
@@ -162,6 +186,9 @@ class GovernorAI(RoleAI):
     def __init__(self, start_post: int = 0):
         self._post_idx = start_post
         self._dwell = 0
+        self._last_proposal: Dict[str, int] = {}  # action -> last tick proposed
+        COOLDOWN = 50  # 同一提案の再発火を抑制する tick 数
+        self._cooldown = COOLDOWN
 
     def decide(self, agent, world, tasks, agents, tick, rng):
         if agent.status != AgentStatus.IDLE:
@@ -184,14 +211,20 @@ class GovernorAI(RoleAI):
                          worker_idle_ratio: float = 0.0) -> Optional[dict]:
         if tick % self.PROPOSAL_INTERVAL != 0:
             return None
-        # Worker の大半が受注できていない → 緊急支援
-        if worker_idle_ratio > 0.5:
+
+        def _can_propose(action: str) -> bool:
+            return tick - self._last_proposal.get(action, -999) >= self._cooldown
+
+        if worker_idle_ratio > 0.5 and _can_propose("worker_support"):
+            self._last_proposal["worker_support"] = tick
             return {"action": "worker_support", "value": round(worker_idle_ratio, 2),
                     "reason": f"Worker稼働率低下 - {(1 - worker_idle_ratio) * 100:.0f}%のみ受注"}
-        if gini > 0.25:
+        if gini > 0.25 and _can_propose("tax_increase"):
+            self._last_proposal["tax_increase"] = tick
             return {"action": "tax_increase", "value": 0.07,
                     "reason": f"Gini={gini:.2f} - 格差拡大を検知"}
-        if completion_rate < 0.6:
+        if completion_rate < 0.6 and _can_propose("reward_boost"):
+            self._last_proposal["reward_boost"] = tick
             return {"action": "reward_boost", "value": 1.2,
                     "reason": f"完了率={completion_rate:.0%} - タスク不成立多発"}
         return None

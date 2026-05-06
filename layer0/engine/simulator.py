@@ -30,6 +30,12 @@ class Simulator:
         self._role_counts: Dict[AgentRole, int] = {}
         self.event_log: List[Event] = []
         self.snapshots: List[StateSnapshot] = []
+        # 動的ポリシーパラメータ — Governor 提案で変動し tick ごとに自然減衰
+        self.policy_params: Dict[str, float] = {
+            "reward_multiplier": 1.0,   # タスクスポーン時の報酬倍率
+            "tax_rate":          Economy.TAX_RATE,  # 動的税率
+            "worker_bid_bonus":  0.0,   # Worker 全員の入札額ボーナス
+        }
 
     def add_agent(self, agent: Agent) -> None:
         idx = self._role_counts.get(agent.role, 0)
@@ -43,7 +49,7 @@ class Simulator:
             y = self.rng.randint(1, self.world.height - 2)
             if self.world.is_passable(x, y):
                 break
-        reward = round(self.rng.uniform(8.0, 20.0), 1)
+        reward = round(self.rng.uniform(8.0, 20.0) * self.policy_params["reward_multiplier"], 1)
         cost = round(self.rng.uniform(1.0, 5.0), 1)
         t = make_task(x, y, reward=reward, energy_cost=cost, tick=self.tick)
         self.tasks.append(t)
@@ -54,6 +60,11 @@ class Simulator:
         self.tick += 1
         if self.tick % 5 == 0:
             self.spawn_task()
+        # Policy params 自然減衰
+        pp = self.policy_params
+        pp["reward_multiplier"] = max(1.0, pp["reward_multiplier"] - 0.008)
+        pp["tax_rate"]          = max(Economy.TAX_RATE, pp["tax_rate"] - 0.001)
+        pp["worker_bid_bonus"]  = max(0.0, pp["worker_bid_bonus"] - 0.06)
         # Safety first
         safety_events = self.safety.check(self.agents, self.tick)
         for e in safety_events:
@@ -108,8 +119,20 @@ class Simulator:
                 continue
             proposal = ai.policy_proposal(self.tick, gini, completion, worker_idle_ratio)
             if proposal:
+                self._apply_policy(proposal)
                 self._emit(EventType.POLICY_CHANGED, agent_id=agent.agent_id,
-                           data={"proposal": proposal, "source": "governor"})
+                           data={"proposal": proposal, "source": "governor",
+                                 "params_after": dict(self.policy_params)})
+
+    def _apply_policy(self, proposal: Dict) -> None:
+        action = proposal.get("action")
+        pp = self.policy_params
+        if action == "worker_support":
+            pp["worker_bid_bonus"] = min(4.0, pp["worker_bid_bonus"] + 1.5)
+        elif action == "tax_increase":
+            pp["tax_rate"] = min(0.25, pp["tax_rate"] + 0.02)
+        elif action == "reward_boost":
+            pp["reward_multiplier"] = min(1.6, pp["reward_multiplier"] + 0.12)
 
     def _run_auctions(self) -> None:
         open_tasks = [t for t in self.tasks if t.status == TaskStatus.OPEN]
@@ -121,6 +144,8 @@ class Simulator:
                     bid_amount = ai.get_bid(task, agent, self.rng) if ai else None
                     if bid_amount is None:
                         continue
+                    if agent.role == AgentRole.WORKER:
+                        bid_amount += self.policy_params["worker_bid_bonus"]
                     bid = round(bid_amount, 1)
                     task.submit_bid(agent.agent_id, bid)
                     self._emit(EventType.BID_SUBMITTED, agent_id=agent.agent_id, task_id=task.task_id, data={"bid": bid})
@@ -158,7 +183,7 @@ class Simulator:
                 agent.status = AgentStatus.IDLE
                 continue
             agent.spend_energy(Agent.WORK_COST)
-            net = task.reward * (1 - Economy.TAX_RATE)
+            net = task.reward * (1 - self.policy_params["tax_rate"])
             agent.balance += net
             task.status = TaskStatus.COMPLETED
             task.completed_tick = self.tick
