@@ -26,27 +26,34 @@ def main():
 
     sim = Simulator(seed=42)
     agents = [
-        # Worker x 10 — グリッド全体に分散
-        ("W01", AgentRole.WORKER,   2,  2), ("W02", AgentRole.WORKER,   6,  2),
-        ("W03", AgentRole.WORKER,  11,  2), ("W04", AgentRole.WORKER,  16,  2),
-        ("W05", AgentRole.WORKER,   2,  8), ("W06", AgentRole.WORKER,   7,  7),
-        ("W07", AgentRole.WORKER,  13,  6), ("W08", AgentRole.WORKER,  17,  8),
-        ("W09", AgentRole.WORKER,   4, 14), ("W10", AgentRole.WORKER,  14, 15),
-        # Guardian x 3 — 外周パトロール
-        ("G1",  AgentRole.GUARDIAN,  3,  3),
-        ("G2",  AgentRole.GUARDIAN, 16,  3),
-        ("G3",  AgentRole.GUARDIAN,  3, 16),
-        # Trader x 3 — 中間エリア
-        ("T1",  AgentRole.TRADER,    6,  6),
-        ("T2",  AgentRole.TRADER,   13,  6),
-        ("T3",  AgentRole.TRADER,    9, 13),
-        # Observer x 2 — 対角担当
-        ("O1",  AgentRole.OBSERVER,  3, 15),
-        ("O2",  AgentRole.OBSERVER, 15,  4),
-        # Governor x 2 — 中央 + 第2拠点スタート
-        ("V1",  AgentRole.GOVERNOR, 10, 10),
-        ("V2",  AgentRole.GOVERNOR,  5,  5),
-    ]
+        # Worker x 30 — グリッド全体に均等分散
+        ("W01",AgentRole.WORKER, 2, 2),("W02",AgentRole.WORKER, 5, 2),("W03",AgentRole.WORKER, 8, 2),
+        ("W04",AgentRole.WORKER,11, 2),("W05",AgentRole.WORKER,14, 2),("W06",AgentRole.WORKER,17, 2),
+        ("W07",AgentRole.WORKER, 2, 6),("W08",AgentRole.WORKER, 5, 6),("W09",AgentRole.WORKER, 8, 6),
+        ("W10",AgentRole.WORKER,11, 6),("W11",AgentRole.WORKER,14, 6),("W12",AgentRole.WORKER,17, 6),
+        ("W13",AgentRole.WORKER, 2,10),("W14",AgentRole.WORKER, 5,10),("W15",AgentRole.WORKER, 8,10),
+        ("W16",AgentRole.WORKER,11,10),("W17",AgentRole.WORKER,14,10),("W18",AgentRole.WORKER,17,10),
+        ("W19",AgentRole.WORKER, 2,14),("W20",AgentRole.WORKER, 5,14),("W21",AgentRole.WORKER, 8,14),
+        ("W22",AgentRole.WORKER,11,14),("W23",AgentRole.WORKER,14,14),("W24",AgentRole.WORKER,17,14),
+        ("W25",AgentRole.WORKER, 2,17),("W26",AgentRole.WORKER, 5,17),("W27",AgentRole.WORKER, 8,17),
+        ("W28",AgentRole.WORKER,11,17),("W29",AgentRole.WORKER,14,17),("W30",AgentRole.WORKER,17,17),
+        # Guardian x 6 — 外周パトロール
+        ("G1",AgentRole.GUARDIAN, 3, 3),("G2",AgentRole.GUARDIAN,16, 3),
+        ("G3",AgentRole.GUARDIAN,16,16),("G4",AgentRole.GUARDIAN, 3,16),
+        ("G5",AgentRole.GUARDIAN,10, 3),("G6",AgentRole.GUARDIAN,10,16),
+        # Trader x 6 — 中間エリア
+        ("T1",AgentRole.TRADER, 6, 6),("T2",AgentRole.TRADER,13, 6),
+        ("T3",AgentRole.TRADER, 6,13),("T4",AgentRole.TRADER,13,13),
+        ("T5",AgentRole.TRADER, 6,10),("T6",AgentRole.TRADER,13,10),
+        # Observer x 5 — 4象限 + 中央
+        ("O1",AgentRole.OBSERVER, 3, 3),("O2",AgentRole.OBSERVER,16, 3),
+        ("O3",AgentRole.OBSERVER, 3,16),("O4",AgentRole.OBSERVER,16,16),
+        ("O5",AgentRole.OBSERVER, 9, 9),
+        # Governor x 3 — 監視拠点スタート分散
+        ("V1",AgentRole.GOVERNOR,10,10),
+        ("V2",AgentRole.GOVERNOR, 5, 5),
+        ("V3",AgentRole.GOVERNOR,15,15),
+    ]  # 30+6+6+5+3 = 50体
     for aid, role, x, y in agents:
         sim.add_agent(Agent(aid, role, x=x, y=y))
 
