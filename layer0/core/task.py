@@ -36,7 +36,7 @@ class Task:
     def resolve_auction(self) -> Optional[str]:
         if not self.bids:
             return None
-        winner = min(self.bids, key=lambda b: b.amount)
+        winner = max(self.bids, key=lambda b: b.amount)
         self.assigned_to = winner.agent_id
         self.status = TaskStatus.ASSIGNED
         return winner.agent_id

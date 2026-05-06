@@ -106,8 +106,60 @@ def main():
                  if e.event_type == EventType.POLICY_CHANGED
                  and e.payload.get("source") == "governor"]
     print(f"\n  Governor 政策提案: {len(proposals)}件")
-    for p in proposals[:3]:
-        print(f"    tick={p.tick}  {p.payload.get('proposal',{})}")
+    for p in proposals[:5]:
+        prop = p.payload.get("proposal", {})
+        print(f"    tick={p.tick:3d}  {prop.get('action','?'):16s}  {prop.get('reason','')}")
+
+    # ── オークション詳細 ────────────────────────────────────────
+    print(f"\n=== オークション詳細 ===")
+    bid_events      = [e for e in sim.event_log if e.event_type == EventType.BID_SUBMITTED]
+    assigned_events = [e for e in sim.event_log if e.event_type == EventType.TASK_ASSIGNED]
+    done_events     = [e for e in sim.event_log if e.event_type == EventType.TASK_COMPLETED]
+
+    n_tasks = len([e for e in sim.event_log if e.event_type == EventType.TASK_CREATED])
+    avg_bidders = len(bid_events) / n_tasks if n_tasks else 0
+    print(f"  タスク数: {n_tasks}  総入札数: {len(bid_events)}  競争率: {avg_bidders:.1f}x")
+
+    role_map = {a.agent_id: a.role.value for a in sim.agents}
+    by_role_bids = defaultdict(list)
+    for e in bid_events:
+        by_role_bids[role_map.get(e.agent_id, "?")].append(e.payload.get("bid", 0))
+
+    wins_by_agent = defaultdict(int)
+    for e in assigned_events:
+        wins_by_agent[e.agent_id] += 1
+
+    by_role_wins = defaultdict(int)
+    for aid, cnt in wins_by_agent.items():
+        by_role_wins[role_map.get(aid, "?")] += cnt
+
+    earn_by_agent = defaultdict(float)
+    for e in done_events:
+        earn_by_agent[e.agent_id] += e.payload.get("reward", 0)
+
+    print(f"\n  役職別  入札数  勝利  勝率   avg入札額  avg獲得報酬")
+    print(f"  {'-'*58}")
+    for role in sorted(by_role_bids):
+        bids   = by_role_bids[role]
+        wins   = by_role_wins[role]
+        rate   = wins / len(bids) * 100 if bids else 0
+        avg_b  = sum(bids) / len(bids) if bids else 0
+        earners= [a for a in sim.agents if role_map[a.agent_id] == role and earn_by_agent[a.agent_id] > 0]
+        avg_e  = sum(earn_by_agent[a.agent_id] for a in earners) / len(earners) if earners else 0
+        print(f"  {role:10s}  {len(bids):5d}  {wins:4d}  {rate:5.1f}%  {avg_b:7.2f} EC  {avg_e:6.1f} EC")
+
+    print(f"\n  上位5エージェント（勝利数）:")
+    top5 = sorted(wins_by_agent.items(), key=lambda x: -x[1])[:5]
+    for i, (aid, w) in enumerate(top5, 1):
+        role   = role_map.get(aid, "?")
+        earned = earn_by_agent[aid]
+        bids   = len([e for e in bid_events if e.agent_id == aid])
+        print(f"    {i}. {aid:5s} [{role:8s}]  勝利 {w:2d}件  入札 {bids:3d}回  獲得 {earned:6.1f} EC")
+
+    workers = [a for a in sim.agents if a.role.value == "Worker"]
+    w_with_job = sum(1 for w in workers if earn_by_agent[w.agent_id] > 0)
+    print(f"\n  Worker 受注状況: {w_with_job}/{len(workers)} 体が受注 "
+          f"({w_with_job/len(workers)*100:.0f}%)")
 
     # パフォーマンス診断
     max_ms = max(tick_times) * 1000

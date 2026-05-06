@@ -44,11 +44,11 @@ class WorkerAI(RoleAI):
 
     def get_bid(self, task, agent, rng):
         if agent.energy < 15:
-            return None  # エネルギー不足なら入札しない
-        # 近いタスクには積極的に、遠いタスクには控えめに
+            return None
         dist = abs(task.x - agent.x) + abs(task.y - agent.y)
-        penalty = dist * 0.05
-        return task.energy_cost + rng.uniform(0.2, 1.5) + penalty
+        # 高報酬ほど積極的に、遠いほど控えめに (最高値入札が勝つ正オークション)
+        bid = task.reward * rng.uniform(0.6, 1.0) - dist * 0.15
+        return round(max(task.energy_cost + 0.1, bid), 1)
 
 
 # ── Guardian ────────────────────────────────────────────────────
@@ -105,14 +105,13 @@ class TraderAI(RoleAI):
 
     def get_bid(self, task, agent, rng):
         if task.reward < self.MIN_REWARD:
-            return None  # 低報酬は無視
+            return None
         margin = task.reward - task.energy_cost
         if margin < self.MIN_MARGIN:
-            return None  # 利益薄は無視
-
-        # 残高が少ないほど積極的に入札（生存本能）
-        aggression = max(0.1, 1.0 - agent.balance / 100.0)
-        return task.energy_cost + max(0.1, rng.uniform(0.1, 1.0) * aggression)
+            return None
+        # 選別したタスクには強気で入札 - Workerの最大入札を超えるレンジ
+        bid = task.energy_cost + margin * rng.uniform(0.65, 0.95)
+        return round(bid, 1)
 
 
 # ── Observer ────────────────────────────────────────────────────
@@ -152,32 +151,49 @@ class ObserverAI(RoleAI):
 
 # ── Governor ────────────────────────────────────────────────────
 class GovernorAI(RoleAI):
-    """KPIを監視してポリシー変更を提案する都市統治者。"""
+    """KPIを監視して都市を巡回しながらポリシー提案を行う統治者。"""
 
     CENTER = (10, 10)
-    PROPOSAL_INTERVAL = 25  # 25 tick ごとに判断
+    # 都市内の監視拠点（中央→四隅→辺中点）
+    POSTS = [(10, 10), (3, 3), (16, 3), (3, 16), (16, 16)]
+    POST_DWELL = 15    # 各拠点で待機する tick 数
+    PROPOSAL_INTERVAL = 25
+
+    def __init__(self, start_post: int = 0):
+        self._post_idx = start_post
+        self._dwell = 0
 
     def decide(self, agent, world, tasks, agents, tick, rng):
-        if agent.status == AgentStatus.IDLE:
-            cx, cy = self.CENTER
-            if agent.x != cx or agent.y != cy:
-                agent.target_x, agent.target_y = cx, cy
-                agent.status = AgentStatus.MOVING
+        if agent.status != AgentStatus.IDLE:
+            return
+        tx, ty = self.POSTS[self._post_idx % len(self.POSTS)]
+        if agent.x == tx and agent.y == ty:
+            self._dwell += 1
+            if self._dwell >= self.POST_DWELL:
+                self._post_idx += 1
+                self._dwell = 0
+        else:
+            agent.target_x, agent.target_y = tx, ty
+            agent.status = AgentStatus.MOVING
 
     def get_bid(self, task, agent, rng):
-        return None  # Governor は入札しない
+        return None
 
     def policy_proposal(self, tick: int, gini: float,
-                         completion_rate: float) -> Optional[dict]:
-        """KPI に基づいてポリシー提案を返す。None なら何もしない。"""
+                         completion_rate: float,
+                         worker_idle_ratio: float = 0.0) -> Optional[dict]:
         if tick % self.PROPOSAL_INTERVAL != 0:
             return None
-        if gini > 0.35:
+        # Worker の大半が受注できていない → 緊急支援
+        if worker_idle_ratio > 0.5:
+            return {"action": "worker_support", "value": round(worker_idle_ratio, 2),
+                    "reason": f"Worker稼働率低下 - {(1 - worker_idle_ratio) * 100:.0f}%のみ受注"}
+        if gini > 0.25:
             return {"action": "tax_increase", "value": 0.07,
-                    "reason": f"Gini={gini:.2f} — 格差拡大を検知"}
-        if completion_rate < 0.55:
+                    "reason": f"Gini={gini:.2f} - 格差拡大を検知"}
+        if completion_rate < 0.6:
             return {"action": "reward_boost", "value": 1.2,
-                    "reason": f"完了率={completion_rate:.0%} — タスク不成立多発"}
+                    "reason": f"完了率={completion_rate:.0%} - タスク不成立多発"}
         return None
 
 
@@ -187,5 +203,5 @@ def make_ai(role: AgentRole, index: int = 0) -> RoleAI:
     if role == AgentRole.GUARDIAN: return GuardianAI(route_index=index)
     if role == AgentRole.TRADER:   return TraderAI()
     if role == AgentRole.OBSERVER: return ObserverAI(quadrant=index)
-    if role == AgentRole.GOVERNOR: return GovernorAI()
+    if role == AgentRole.GOVERNOR: return GovernorAI(start_post=index)
     return RoleAI()

@@ -91,13 +91,22 @@ class Simulator:
         scores = self.policy.score(self.agents, self.tasks)
         gini = 1.0 - scores.get("equality", 1.0)
         completion = scores.get("efficiency", 1.0)
+
+        workers = [a for a in self.agents if a.role == AgentRole.WORKER]
+        if workers:
+            earned = {e.agent_id for e in self.event_log
+                      if e.event_type == EventType.TASK_COMPLETED and e.agent_id}
+            worker_idle_ratio = 1.0 - sum(1 for w in workers if w.agent_id in earned) / len(workers)
+        else:
+            worker_idle_ratio = 0.0
+
         for agent in self.agents:
             if agent.role != AgentRole.GOVERNOR:
                 continue
             ai = self._ai.get(agent.agent_id)
             if not isinstance(ai, GovernorAI):
                 continue
-            proposal = ai.policy_proposal(self.tick, gini, completion)
+            proposal = ai.policy_proposal(self.tick, gini, completion, worker_idle_ratio)
             if proposal:
                 self._emit(EventType.POLICY_CHANGED, agent_id=agent.agent_id,
                            data={"proposal": proposal, "source": "governor"})
