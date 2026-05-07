@@ -23,49 +23,95 @@ Layer0 が生成したイベントを MQTT が中継し、Layer3 が監視・制
 
 ---
 
-## 5つの役職
+## 7つの役職
 
-| 役職 | 数 | 色 | 役割 |
-|------|----|----|------|
-| **Worker** | 30 | 🟢 緑 | タスクをオークション入札で獲得。近いタスクほど強く入札。sector学習で最適化 |
-| **Guardian** | 6 | 🔴 赤 | 5点パトロールルートを永続巡回。タスクに入札しない守護者 |
-| **Trader** | 6 | 🟠 橙 | 市場平均をEMAで学習し、高マージンタスクのみ選別入札 |
-| **Observer** | 5 | 🔵 青 | 4象限を分担カバー。情報収集専門でタスク入札なし |
-| **Governor** | 3 | 🟣 紫 | 25tick毎にKPI分析→政策提案。提案は世界に即時反映 |
+| 役職 | 色 | 役割 | 収入源 |
+|------|----|------|--------|
+| **Worker** | 🟢 緑 | タスクをオークション入札で獲得。5種の性格特性が戦略を決定 | タスク報酬 |
+| **Guardian** | 🔴 赤 | 5点ルートを永続パトロール。治安タスクにも入札 | パトロール給与 + 治安タスク |
+| **Trader** | 🟠 橙 | 市場平均をEMAで学習し高マージンタスクを選別。記憶売買の仲介も担う | タスク報酬 + 記憶マージン |
+| **Observer** | 🔵 青 | 4象限を分担カバー。調査タスクに入札 | パトロール給与 + 調査タスク |
+| **Governor** | 🟣 紫 | 25tick毎にKPI分析→政策提案。税収の配当で収入を得る | 税配当（KPI連動） |
+| **Medic** | ⚪ 白 | 低エネルギーのエージェントに接近し治療サービスを提供 | 治療費（EC） |
+| **Architect** | 🟡 黄 | 建設タスク専門。完成した建物が毎tick不労所得を生む | 建設報酬 + 建物収入 |
 
-### Governor の政策提案
+### Worker 5種の性格特性
 
-| 条件 | 提案 | 効果 |
-|------|------|------|
-| Worker稼働率 < 50% | `worker_support` | Worker入札ボーナス +1.5 EC |
-| Gini > 0.25 | `tax_increase` | 税率 +2% |
-| 完了率 < 60% | `reward_boost` | タスク報酬倍率 +12% |
-
-効果は毎tick自然減衰し、状況が改善されなければ再提案される。
+| 特性 | 戦略 |
+|------|------|
+| **HUSTLER** | 高熱意・距離を気にせず何でも入札 |
+| **SAVER** | 近場・MICROタスク専門。エネルギー温存重視 |
+| **SPECIALIST** | HEAVYタスクに超積極的、それ以外は消極的 |
+| **EXPLORER** | 距離ペナルティほぼゼロ。広域をカバー |
+| **OPPORTUNIST** | 競合の少ないセクターを狙い撃ち |
 
 ---
 
-## Layer3 City OS
+## ロボット固有メカニクス
 
-```python
-from layer3.city_os import CityOS
-from layer0.core.agent import Agent, AgentRole
+### Quantum Auction（量子入札）
+通常の「最高入札者が確実に勝つ」オークションとは異なる。
 
-city = CityOS(seed=42)
-city.add_agent(Agent("W1", AgentRole.WORKER, x=2, y=2))
-city.run(100)
-
-print(city.summary())
-# {'tick': 100, 'emergency_level': 0, 'gini': 0.12, ...}
+```
+P(当選) ∝ 入札額
 ```
 
-| モジュール | 役割 |
-|-----------|------|
-| `CityOS` | 統合エントリポイント。緊急Lv3で自動EMERGENCY_STOP |
-| `AlertSystem` | ENERGY/ECONOMY/TASK/SAFETY を INFO/WARNING/CRITICAL 判定 |
-| `StateManager` | Simulator状態の読み取り専用API |
-| `CommandDispatcher` | PolicyGate検証後にコマンドを適用 |
-| `PolicyGate` | 壁チェック / 緊急時制限 / エージェント存在確認 |
+高い入札は有利だが確定ではない。低い入札の SAVER や OPPORTUNIST が確率的に受注できる。**不確実性が戦略に組み込まれる。**
+
+### Memory Market（記憶売買）
+ロボットだけが持つ「経験の外部化」メカニクス。
+
+```
+高経験 Worker → Trader 買取 → 新人 Worker へ転売
+```
+
+- 高経験 Worker の `experience` 値を 0.4 EC/点 で Trader が買い取る
+- Trader は 1.6倍 のマージンで新人 Worker へ転売
+- 記憶を買った Worker は **8tick 間、入札に +1.5 EC ボーナス**
+
+### 累進資本課税
+Architect が建物を増やすほど課税率が上昇。資本の独占を抑制する。
+
+| 建物数 | 追加税率 |
+|--------|---------|
+| 1棟目 | 0% |
+| 2棟目 | +15% |
+| 3棟目 | +30% |
+| 4棟目以降 | +45%（上限）|
+
+余剰税は `tax_pool` に還元 → Governor が `basic_income` で全員に再分配。
+
+### 建物減価償却
+建物は **50tick で自然崩壊**。Architect は新しい建設タスクを取り続けないと収入が途絶える。建物セルを通過したエージェントはエネルギーを +0.3 回収（インフラ恩恵）。
+
+---
+
+## 経済設計
+
+```
+タスク報酬
+  └─ 5% 税収
+       ├─ 30% → Governor（KPIスコア×0.4〜1.3倍で調整）
+       └─ 70% → tax_pool
+                   ├─ Guardian/Observer パトロール給与
+                   ├─ Architect 建物収入
+                   ├─ セーフティネット（残高15EC以下に5EC補助）
+                   └─ basic_income（Governor提案で全員均等分配）
+
+全エージェント: 維持費 0.2 EC/tick（ECシンク）
+```
+
+### Governor の政策提案（25tick毎）
+
+| 条件 | 提案 | 効果 |
+|------|------|------|
+| 完了率 < 60% | `reward_boost` | タスク報酬倍率 +12% |
+| Worker 稼働率 < 50% | `worker_support` | Worker 入札ボーナス +1.5 EC |
+| 税プール > 400 EC かつ Gini > 0.15 | `basic_income` | 全員均等分配 |
+| Gini > 0.30 かつ KPI > 0.6 | `tax_increase` | 税率 +2% |
+
+全 Governor が同一提案 → コンセンサスボーナス 1.5倍。  
+Governor の収入は KPI スコア（効率性 + 平等性）に連動 — **良い統治が自分の収入を増やす。**
 
 ---
 
@@ -73,11 +119,14 @@ print(city.summary())
 
 ```bash
 pip install pydantic paho-mqtt pillow edge-tts
+```
+
+```bash
 # Mosquitto MQTT broker (Windows)
 # https://mosquitto.org/download/
 ```
 
-`mosquitto.conf` に WebSocket 設定が必要:
+`mosquitto.conf`:
 ```
 listener 1883
 listener 9001
@@ -89,7 +138,7 @@ allow_anonymous true
 
 ## 実行方法
 
-### スケールテスト (50体 / 200tick)
+### スケールテスト（67体 / 200tick）
 ```bash
 python layer0/main_scale_test.py
 ```
@@ -102,11 +151,10 @@ python -m http.server 8080 --directory web
 # ターミナル2: シミュレーション起動
 python layer2/run_live.py
 
-# ブラウザで開く
-# http://localhost:8080/live_viewer.html
+# ブラウザで開く → http://localhost:8080/live_viewer.html
 ```
 
-### テスト (92テスト)
+### テスト（132テスト）
 ```bash
 python -m pytest tests/ -v
 ```
@@ -114,9 +162,11 @@ python -m pytest tests/ -v
 ### Event Sourcing — イベントログから状態を再構築
 ```python
 from layer0.core.event_sourcing import EventReplayer
+
 replayer = EventReplayer(agents)
 replayer.apply_all(sim.event_log)
-state = replayer.final_state()
+state = replayer.state_at(tick=50)   # 任意 tick の状態
+final = replayer.final_state()
 ```
 
 ---
@@ -127,78 +177,94 @@ state = replayer.final_state()
 hacs/
 ├── layer0/
 │   ├── core/
-│   │   ├── world.py          # 20x20 グリッドマップ
-│   │   ├── agent.py          # Agent dataclass
-│   │   ├── task.py           # Task / Bid / オークション
-│   │   ├── economy.py        # 税・台帳
-│   │   ├── policy.py         # PolicyEngine (制約・目標)
-│   │   ├── safety.py         # SafetyGate (夜間制限・緊急停止)
-│   │   ├── ai.py             # 役職固有AI (Worker/Guardian/Trader/Observer/Governor)
-│   │   └── event_sourcing.py # EventReplayer
+│   │   ├── world.py          # 20×20 グリッドマップ・充電ステーション
+│   │   ├── agent.py          # Agent（experience / memory_boost 含む）
+│   │   ├── task.py           # Task / Bid / Quantum Auction
+│   │   ├── economy.py        # 税プール・報酬・セーフティネット
+│   │   ├── policy.py         # PolicyEngine（制約・目標）
+│   │   ├── safety.py         # SafetyGate（夜間制限・緊急停止）
+│   │   ├── ai.py             # 7役職AI + Worker 5特性
+│   │   └── event_sourcing.py # EventReplayer（イベントから状態再構築）
 │   ├── engine/
 │   │   └── simulator.py      # メインシミュレーター
 │   └── schemas/
-│       ├── event.py          # Event / EventType / MQTT topic
+│       ├── event.py          # Event / EventType（20種以上）
 │       ├── command.py        # Command / CommandAction
 │       └── state.py          # StateSnapshot
 ├── layer2/
 │   ├── event_bus.py          # MQTT Pub/Sub ラッパー
-│   └── run_live.py           # 50体リアルタイム配信 (0.2s/tick)
+│   └── run_live.py           # リアルタイム配信（0.2s/tick）
 ├── layer3/
 │   ├── city_os.py            # CityOS 統合エントリポイント
-│   ├── alert_system.py       # AlertSystem
-│   ├── state_manager.py      # StateManager
-│   ├── command_dispatcher.py # CommandDispatcher
-│   └── policy_gate.py        # PolicyGate
-├── tests/                    # pytest 92テスト
+│   ├── alert_system.py       # AlertSystem（INFO/WARNING/CRITICAL）
+│   ├── state_manager.py      # StateManager（読み取り専用 API）
+│   ├── command_dispatcher.py # CommandDispatcher + PolicyGate
+│   └── policy_gate.py        # PolicyGate（壁・緊急時チェック）
+├── tests/                    # pytest 132テスト
 └── web/
     ├── live_viewer.html       # Canvas 2D リアルタイムビューア
-    └── live_dashboard.html    # MQTT KPIダッシュボード
+    └── live_dashboard.html    # MQTT KPI ダッシュボード
 ```
 
 ---
 
-## パフォーマンス (50体 / 200tick)
+## パフォーマンス（67体 / 200tick）
 
 | 指標 | 値 |
 |------|-----|
-| 平均 tick 速度 | ~2ms/tick |
-| 最大 tick 時間 | ~22ms (< 50ms 合格) |
-| 総イベント数 | ~4,500件 |
-| Worker 受注率 | ~60% |
-| 効率性スコア | ~0.95 |
-| 平等性スコア | ~0.88 |
+| 平均 tick 速度 | ~9ms/tick |
+| 最大 tick 時間 | ~38ms（< 50ms 合格）|
+| 総イベント数 | ~11,700件 |
+| 効率性スコア | 0.974 |
+| 平等性スコア | 0.776 |
+| pytest | **132テスト全通過** |
 
 ---
 
 ## 進捗ログ
 
 <!-- AUTO-UPDATED -->
-**最終更新: 2026-05-06**
+**最終更新: 2026-05-07**
 
 ### 実装済み
-- [x] Layer0: World / Agent / Task / Economy / Policy / Safety
-- [x] Layer0: 役職固有AI — Worker(sector学習) / Guardian(パトロール) / Trader(市場学習) / Observer(象限カバー) / Governor(政策提案)
-- [x] Layer0: Event Sourcing (EventReplayer)
-- [x] Layer0: pytest 92テスト全通過
-- [x] Layer0: 50体スケールテスト (2ms/tick)
-- [x] Layer2: MQTT Event Bus (Mosquitto + paho-mqtt)
-- [x] Layer2: リアルタイムライブビューア (50体 / 0.2s/tick)
-- [x] Layer3: City OS (CityOS / AlertSystem / StateManager / CommandDispatcher / PolicyGate)
-- [x] Governor 政策実効化 (提案が実際に世界を変える)
 
-### 未実装
-- [ ] Layer1: 物理接続 (Raspberry Pi / ESP32)
-- [ ] Governance 強化 (投票・多数決・拒否権)
-- [ ] デジタルツイン (高品質 3D 可視化)
-- [ ] AWS クラウド移行
+**Layer0 コア**
+- [x] World / Agent / Task / Economy / Policy / Safety
+- [x] 7役職 AI（Worker / Guardian / Trader / Observer / Governor / Medic / Architect）
+- [x] Worker 5特性（HUSTLER / SAVER / SPECIALIST / EXPLORER / OPPORTUNIST）
+- [x] 8タスクタイプ（standard / heavy / urgent / trade / security / survey / micro / construct）
+- [x] Event Sourcing（EventReplayer — イベントログのみから状態完全再構築）
+- [x] pytest 132テスト全通過
+
+**ロボット固有メカニクス**
+- [x] Quantum Auction — P(当選) ∝ 入札額
+- [x] Memory Market — Trader による経験値の売買・入札ボーナス
+- [x] 累進資本課税 — 建物棟数に応じて課税率増加
+- [x] 建物減価償却 — 50tick で自然崩壊
+
+**経済システム**
+- [x] 税プール + KPI連動 Governor 配当
+- [x] 維持費（EC シンク）/ セーフティネット / パトロール給与 / 基本所得
+
+**Layer2 / Layer3**
+- [x] MQTT Event Bus（Mosquitto + paho-mqtt + WebSocket）
+- [x] リアルタイムライブビューア
+- [x] City OS（CityOS / AlertSystem / StateManager / CommandDispatcher / PolicyGate）
+
+### 検討中
+- [ ] エージェント寿命と相続（死→遺産引き継ぎで再起動）
+- [ ] ブラックマーケット（高報酬違法タスク、Guardianに捕捉リスク）
+- [ ] Governor 弾劾とクーデター（Worker 集合投票で権力交代）
+- [ ] 感染バグとパンデミック（Medic が唯一の治療手段）
+- [ ] Layer1: 物理接続（Raspberry Pi / ESP32）
+- [ ] デジタルツイン（高品質 3D 可視化）
 <!-- /AUTO-UPDATED -->
 
 ---
 
 ## 技術スタック
 
-- **Python 3.9** / Pydantic v2 / dataclasses
+- **Python 3.9+** / Pydantic v2 / dataclasses
 - **MQTT**: Mosquitto 2.1.2 / paho-mqtt / WebSocket (port 9001)
 - **Web**: Vanilla JS / Canvas 2D / MQTT.js
 - **動画**: Pillow / edge-tts (ja-JP-NanamiNeural) / ffmpeg
