@@ -42,8 +42,8 @@ class Simulator:
         self._market_event: Optional[Dict] = None
         self._market_event_end: int = 0
         self._next_market_event: int = self.rng.randint(30, 60)
-        # 建物: (x,y) → owner_agent_id
-        self._buildings: Dict[tuple, str] = {}
+        # 建物: (x,y) → {"owner": agent_id, "durability": float, "built_tick": int}
+        self._buildings: Dict[tuple, dict] = {}
 
     def add_agent(self, agent: Agent) -> None:
         idx = self._role_counts.get(agent.role, 0)
@@ -139,10 +139,16 @@ class Simulator:
         self._charge_agents()
         # Medic 治療サービス
         self._heal_agents()
+        # Memory Market（Trader による記憶売買）
+        self._run_memory_market()
         # パトロール給与（Guardian/Observer）
         self._pay_patrol_salary()
-        # 建物収入（Architect）
+        # 建物収入（Architect — 累進課税 + 減価償却）
         self._collect_building_income()
+        # 記憶ブーストのカウントダウン
+        for agent in self.agents:
+            if agent.memory_boost > 0:
+                agent.memory_boost -= 1
         snap = self._snapshot()
         self.snapshots.append(snap)
         return snap
@@ -288,19 +294,111 @@ class Simulator:
                            data={"salary": salary, "balance": round(agent.balance, 1)})
 
     def _collect_building_income(self) -> None:
-        """建物オーナー（Architect）は毎 tick 税プールから不労所得を得る。
-        通過エージェントはエネルギー効率ボーナスを受ける（_move_agents 内で適用）。"""
+        """建物収入 + 累進資本課税 + 減価償却。
+        - 毎tick 耐久度 -2（50tick で自然崩壊）
+        - 2棟目以降は累進課税（+15%/棟、最大45%）
+        - 余剰税は tax_pool へ還元（Governor が再分配）
+        """
+        DEPRECIATION  = 2.0   # 耐久度/tick
+        CAPITAL_TAX_STEP = 0.15
+        MAX_CAPITAL_TAX  = 0.45
         rate = Economy.BUILDING_INCOME_RATE
-        for (bx, by), owner_id in list(self._buildings.items()):
+
+        # ① 減価償却
+        collapsed = [pos for pos, bd in self._buildings.items()
+                     if bd["durability"] - DEPRECIATION <= 0]
+        for pos in collapsed:
+            del self._buildings[pos]
+            self._emit(EventType.BUILDING_INCOME,
+                       data={"event": "collapsed", "x": pos[0], "y": pos[1]})
+        for bdata in self._buildings.values():
+            bdata["durability"] -= DEPRECIATION
+
+        # ② 建物収入（累進課税）
+        owner_seen: Dict[str, int] = {}
+        for (bx, by), bdata in list(self._buildings.items()):
+            owner_id = bdata["owner"]
             if self.economy.tax_pool < rate:
                 break
             owner = self._get_agent(owner_id)
-            if owner:
-                self.economy.tax_pool -= rate
-                owner.balance += rate
-                self._emit(EventType.BUILDING_INCOME, agent_id=owner_id,
-                           data={"x": bx, "y": by, "income": rate,
-                                 "balance": round(owner.balance, 1)})
+            if not owner:
+                continue
+            seen = owner_seen.get(owner_id, 0)
+            owner_seen[owner_id] = seen + 1
+            cap_tax = min(MAX_CAPITAL_TAX, seen * CAPITAL_TAX_STEP)
+            net_income  = round(rate * (1 - cap_tax), 2)
+            extra_to_pool = round(rate * cap_tax, 2)
+            self.economy.tax_pool -= rate
+            self.economy.tax_pool += extra_to_pool
+            owner.balance += net_income
+            self._emit(EventType.BUILDING_INCOME, agent_id=owner_id,
+                       data={"x": bx, "y": by, "income": net_income,
+                             "capital_tax": cap_tax,
+                             "durability": round(bdata["durability"], 1),
+                             "balance": round(owner.balance, 1)})
+
+    def _run_memory_market(self) -> None:
+        """Memory Market: Trader が高経験WorkerからAI記憶を買い、新人Workerへ転売する。
+        買った記憶 = 一定期間の入札ボーナス（WorkerAI.memory_boost で管理）。
+        """
+        from layer0.core.ai import TraderAI
+        for trader in self.agents:
+            if trader.role != AgentRole.TRADER:
+                continue
+            tai = self._ai.get(trader.agent_id)
+            if not isinstance(tai, TraderAI):
+                continue
+            if self.tick - tai._last_trade_tick < tai.TRADE_COOLDOWN:
+                continue
+
+            adjacent = [a for a in self.agents
+                        if abs(a.x - trader.x) + abs(a.y - trader.y) <= 1
+                        and a.agent_id != trader.agent_id]
+
+            # 買取：高経験Worker の記憶を仕入れる
+            if len(tai._memory_inventory) < tai.MAX_MEMORIES:
+                sellers = sorted(
+                    [a for a in adjacent if a.role == AgentRole.WORKER
+                     and a.experience >= tai.BUY_MIN_EXP],
+                    key=lambda a: -a.experience
+                )
+                for seller in sellers:
+                    price = round(seller.experience * tai.BUY_PRICE_PER_EXP, 1)
+                    if trader.balance < price:
+                        continue
+                    trader.balance -= price
+                    seller.balance += price
+                    tai._memory_inventory.append(
+                        {"experience": seller.experience, "price_paid": price}
+                    )
+                    tai._last_trade_tick = self.tick
+                    self._emit(EventType.MEMORY_TRADE, agent_id=trader.agent_id,
+                               data={"action": "buy", "seller_id": seller.agent_id,
+                                     "experience": seller.experience, "price": price})
+                    break
+
+            # 転売：新人Worker に記憶を売る
+            if tai._memory_inventory:
+                buyers = sorted(
+                    [a for a in adjacent if a.role == AgentRole.WORKER
+                     and a.experience <= tai.SELL_MAX_EXP and a.memory_boost == 0],
+                    key=lambda a: a.experience
+                )
+                for buyer in buyers:
+                    mem = tai._memory_inventory[0]
+                    sell_price = round(mem["price_paid"] * tai.SELL_MARKUP, 1)
+                    if buyer.balance < sell_price:
+                        continue
+                    buyer.balance -= sell_price
+                    trader.balance += sell_price
+                    buyer.memory_boost = 8  # 8tick 間入札ボーナス
+                    tai._memory_inventory.pop(0)
+                    tai._last_trade_tick = self.tick
+                    self._emit(EventType.MEMORY_TRADE, agent_id=trader.agent_id,
+                               data={"action": "sell", "buyer_id": buyer.agent_id,
+                                     "experience": mem["experience"], "price": sell_price,
+                                     "boost_ticks": 8})
+                    break
 
     def _heal_agents(self) -> None:
         for medic in self.agents:
@@ -374,7 +472,7 @@ class Simulator:
                     task.submit_bid(agent.agent_id, bid)
                     self._emit(EventType.BID_SUBMITTED, agent_id=agent.agent_id, task_id=task.task_id,
                                data={"bid": bid, "task_type": task.task_type.value})
-            winner_id = task.resolve_auction()
+            winner_id = task.resolve_auction(rng=self.rng)
             if winner_id:
                 winner = self._get_agent(winner_id)
                 if winner:
@@ -383,8 +481,11 @@ class Simulator:
                     winner.target_x = task.x
                     winner.target_y = task.y
                     winning_bid = next((b.amount for b in task.bids if b.agent_id == winner_id), 0)
+                    total_bids = sum(b.amount for b in task.bids)
+                    win_prob = round(winning_bid / total_bids, 3) if total_bids > 0 else 1.0
                     self._emit(EventType.TASK_ASSIGNED, agent_id=winner_id, task_id=task.task_id,
-                               data={"target_x": task.x, "target_y": task.y, "bid": winning_bid})
+                               data={"target_x": task.x, "target_y": task.y, "bid": winning_bid,
+                                     "win_prob": win_prob, "num_bidders": len(task.bids)})
 
     def _move_agents(self) -> None:
         for agent in self.agents:
@@ -394,8 +495,9 @@ class Simulator:
             if self.world.is_passable(nx, ny):
                 agent.x, agent.y = nx, ny
                 agent.spend_energy(Agent.MOVE_COST)
-                # 建物セルを通過 → 移動コストの一部を回収（インフラ効率化）
-                if (nx, ny) in self._buildings:
+                # 建物セルを通過 → 移動コストの一部を回収（耐久あり建物のみ）
+                bdata = self._buildings.get((nx, ny))
+                if bdata and bdata["durability"] > 0:
                     agent.energy = min(Agent.MAX_ENERGY, agent.energy + 0.3)
                 self._emit(EventType.AGENT_MOVED, agent_id=agent.agent_id,
                            data={"x": nx, "y": ny, "energy": round(agent.energy, 1)})
@@ -431,12 +533,16 @@ class Simulator:
                     self._emit(EventType.GOVERNANCE_REWARD, agent_id=gov.agent_id,
                                data={"reason": "tax_dividend", "reward": share,
                                      "kpi_factor": kpi_factor, "task_id": task.task_id})
-            # CONSTRUCT完了 → 建物を登録
+            # CONSTRUCT完了 → 建物を登録（耐久度100でスタート）
             if task.task_type == TaskType.CONSTRUCT:
-                self._buildings[(task.x, task.y)] = agent.agent_id
+                self._buildings[(task.x, task.y)] = {
+                    "owner": agent.agent_id, "durability": 100.0, "built_tick": self.tick
+                }
                 self._emit(EventType.BUILDING_INCOME, agent_id=agent.agent_id,
                            data={"event": "built", "x": task.x, "y": task.y,
                                  "buildings_total": len(self._buildings)})
+            # 経験値加算（記憶資本）
+            agent.experience += 1
             self._emit(EventType.TASK_COMPLETED, agent_id=agent.agent_id, task_id=task.task_id,
                        data={"reward": net, "energy": round(agent.energy, 1), "balance": round(agent.balance, 1)})
             agent.assigned_task_id = None

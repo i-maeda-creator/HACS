@@ -30,6 +30,7 @@ class EventType(str, Enum):
     PATROL_SALARY         = "PatrolSalary"    # Guardian/Observer 巡回給与
     BUILDING_INCOME       = "BuildingIncome"  # Architect 建物不労所得
     BASIC_INCOME_PAID     = "BasicIncomePaid" # 全員への基本所得分配
+    MEMORY_TRADE          = "MemoryTrade"     # Trader による記憶売買
 
 
 # EventType → MQTT トピックのマッピング

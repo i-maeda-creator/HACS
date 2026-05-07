@@ -130,10 +130,22 @@ class Task:
     def submit_bid(self, agent_id: str, amount: float) -> None:
         self.bids.append(Bid(agent_id=agent_id, amount=amount))
 
-    def resolve_auction(self) -> Optional[str]:
+    def resolve_auction(self, rng=None) -> Optional[str]:
+        """Quantum Auction: P(win) ∝ bid amount. Higher bids win more often, but not guaranteed."""
         if not self.bids:
             return None
-        winner = max(self.bids, key=lambda b: b.amount)
+        if rng is None:
+            winner = max(self.bids, key=lambda b: b.amount)
+        else:
+            total = sum(b.amount for b in self.bids)
+            r = rng.random() * total
+            cumulative = 0.0
+            winner = self.bids[-1]
+            for b in self.bids:
+                cumulative += b.amount
+                if r <= cumulative:
+                    winner = b
+                    break
         self.assigned_to = winner.agent_id
         self.status = TaskStatus.ASSIGNED
         return winner.agent_id

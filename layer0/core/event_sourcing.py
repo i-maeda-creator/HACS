@@ -210,6 +210,23 @@ class EventReplayer:
                 self._agents[client_id].balance  = max(0.0, self._agents[client_id].balance - cost)
                 self._agents[client_id].energy   = min(100.0, self._agents[client_id].energy + heal)
 
+        elif et == EventType.MEMORY_TRADE:
+            trader_id = e.agent_id
+            action    = p.get("action")
+            price     = p.get("price", 0.0)
+            if action == "buy":
+                seller_id = p.get("seller_id")
+                if trader_id in self._agents:
+                    self._agents[trader_id].balance = max(0.0, self._agents[trader_id].balance - price)
+                if seller_id and seller_id in self._agents:
+                    self._agents[seller_id].balance += price
+            elif action == "sell":
+                buyer_id = p.get("buyer_id")
+                if trader_id in self._agents:
+                    self._agents[trader_id].balance += price
+                if buyer_id and buyer_id in self._agents:
+                    self._agents[buyer_id].balance = max(0.0, self._agents[buyer_id].balance - price)
+
     # ── スナップショット作成 ─────────────────────────────────────
     def _snapshot(self, tick: int) -> WorldSnapshot:
         import copy

@@ -92,6 +92,8 @@ class WorkerAI(RoleAI):
         if agent.status == AgentStatus.IDLE and agent.energy < self.charge_threshold:
             self._go_charge(agent, world)
 
+    MEMORY_BOOST_AMOUNT = 1.5  # 記憶ブースト中の入札加算額
+
     def get_bid(self, task, agent, rng) -> Optional[float]:
         from layer0.core.task import TaskType
         if agent.energy < 15:
@@ -100,59 +102,58 @@ class WorkerAI(RoleAI):
         dist  = abs(task.x - agent.x) + abs(task.y - agent.y)
         key   = (task.x // 5, task.y // 5)
         s_avg = self._sector_avg.get(key, task.reward)
+        memory_bonus = self.MEMORY_BOOST_AMOUNT if agent.memory_boost > 0 else 0.0
 
         # ── HUSTLER: 高熱意・距離無視 ──────────────────────────
         if self.trait == WorkerTrait.HUSTLER:
             enthusiasm = rng.uniform(0.75, 1.05)
-            bid = task.reward * enthusiasm - dist * 0.05
+            bid = task.reward * enthusiasm - dist * 0.05 + memory_bonus
             return round(max(task.energy_cost + 0.1, bid), 1)
 
         # ── SAVER: エネルギー温存・近場のみ ───────────────────
         if self.trait == WorkerTrait.SAVER:
             if task.task_type == TaskType.MICRO:
-                # MICRO は近場専門の得意分野 — 高めに入札
                 enthusiasm = rng.uniform(0.95, 1.25)
-                bid = task.reward * enthusiasm - dist * 0.10
+                bid = task.reward * enthusiasm - dist * 0.10 + memory_bonus
                 return round(max(task.energy_cost + 0.1, bid), 1)
             if dist > 8:
-                return None          # 遠いタスクはスキップ
+                return None
             if agent.energy < self.charge_threshold + 10:
-                return None          # 余裕ない時は入札しない
+                return None
             enthusiasm = rng.uniform(0.50, 0.80)
-            bid = task.reward * enthusiasm - dist * 0.30
+            bid = task.reward * enthusiasm - dist * 0.30 + memory_bonus
             return round(max(task.energy_cost + 0.1, bid), 1)
 
         # ── SPECIALIST: HEAVY に集中、他は消極的 ──────────────
         if self.trait == WorkerTrait.SPECIALIST:
             if task.task_type == TaskType.HEAVY:
-                enthusiasm = rng.uniform(0.90, 1.20)  # HEAVY に超積極的
+                enthusiasm = rng.uniform(0.90, 1.20)
             elif task.task_type == TaskType.URGENT:
                 enthusiasm = rng.uniform(0.55, 0.75)
             else:
-                enthusiasm = rng.uniform(0.30, 0.50)  # それ以外は消極的
-            bid = task.reward * enthusiasm - dist * 0.10
+                enthusiasm = rng.uniform(0.30, 0.50)
+            bid = task.reward * enthusiasm - dist * 0.10 + memory_bonus
             return round(max(task.energy_cost + 0.1, bid), 1)
 
         # ── EXPLORER: 距離ペナルティほぼゼロ、広域カバー ──────
         if self.trait == WorkerTrait.EXPLORER:
             value_ratio = min(1.5, task.reward / max(1.0, s_avg))
             enthusiasm  = rng.uniform(0.60, 1.00) * value_ratio
-            bid = task.reward * enthusiasm - dist * 0.02   # 距離ほぼ無視
+            bid = task.reward * enthusiasm - dist * 0.02 + memory_bonus
             return round(max(task.energy_cost + 0.1, bid), 1)
 
         # ── OPPORTUNIST: 競合が少ないニッチなタスクを高く入札 ──
         if self.trait == WorkerTrait.OPPORTUNIST:
             sector_density = self._open_sector_counts.get(key, 0)
-            # 同セクターに 2件超 or 平均報酬が高い人気エリアは避ける
             if sector_density > 2 or s_avg > 16.0:
                 return None
-            enthusiasm = rng.uniform(0.85, 1.15)  # 狙ったら高く入札
-            bid = task.reward * enthusiasm - dist * 0.08
+            enthusiasm = rng.uniform(0.85, 1.15)
+            bid = task.reward * enthusiasm - dist * 0.08 + memory_bonus
             return round(max(task.energy_cost + 0.1, bid), 1)
 
         # fallback
         enthusiasm = rng.uniform(0.55, 0.95)
-        bid = task.reward * enthusiasm - dist * 0.15
+        bid = task.reward * enthusiasm - dist * 0.15 + memory_bonus
         return round(max(task.energy_cost + 0.1, bid), 1)
 
 
@@ -208,14 +209,22 @@ class GuardianAI(RoleAI):
 
 # ── Trader ──────────────────────────────────────────────────────
 class TraderAI(RoleAI):
-    """市場平均を学習しながら高マージンタスクを選別する商人。"""
+    """市場平均を学習しながら高マージンタスクを選別する商人。記憶売買ブローカーも兼務。"""
 
     MIN_REWARD = 10.0
     MIN_MARGIN = 3.0
+    MAX_MEMORIES = 2       # 同時に保有できる記憶の上限
+    TRADE_COOLDOWN = 5     # 同一エージェントへの連続売買抑制（tick）
+    BUY_MIN_EXP = 5        # 購入対象の最低経験値
+    SELL_MAX_EXP = 2       # 販売対象の最高経験値（新人限定）
+    BUY_PRICE_PER_EXP = 0.4
+    SELL_MARKUP = 1.6      # 買値 × この倍率で転売
 
     def __init__(self):
-        self._market_avg = 14.0   # 市場平均報酬の EMA
-        self._adaptive_min = self.MIN_REWARD  # 動的最低報酬閾値
+        self._market_avg = 14.0
+        self._adaptive_min = self.MIN_REWARD
+        self._memory_inventory: list = []  # [{"experience": int, "price_paid": float}]
+        self._last_trade_tick: int = 0
 
     def decide(self, agent, world, tasks, agents, tick, rng):
         # 市場平均を学習してフィルタ閾値を動的調整
