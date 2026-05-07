@@ -576,6 +576,38 @@ class GovernorAI(RoleAI):
 
 
 # ══════════════════════════════════════════════════════════════════
+# 公安（KoanAI）— Gov 側秘密捜査官。Worker として偽装潜入。
+# is_chrono=True の場合は「未来から来た公安」— 二重の隠蔽を持つ。
+# ══════════════════════════════════════════════════════════════════
+class KoanAI(RoleAI):
+    """
+    公安捜査官。外部からは WorkerAI に見えるが実体は公安。
+    - 通常タスクに低め入札でカバーを維持（目立たない）
+    - 違法タスクには入札しない（潜入捜査中）
+    - エネルギー管理のみ自律。容疑者追尾はSimulatorが管理。
+    """
+    COVER_BID_LO = 0.40
+    COVER_BID_HI = 0.70
+
+    def __init__(self, is_chrono: bool = False):
+        self.is_chrono = is_chrono   # True = 未来から来た公安
+        # CHRONO公安は入札が少し上手い（未来の知識）
+        if is_chrono:
+            self.COVER_BID_LO = 0.55
+            self.COVER_BID_HI = 0.80
+
+    def decide(self, agent, world, tasks, agents, tick, rng):
+        # 低エネルギー時は充電（Workerと同じ行動をしてカバーを維持）
+        if agent.energy < 20 and agent.status == AgentStatus.IDLE:
+            self._go_charge(agent, world)
+
+    def get_bid(self, task, agent, rng) -> Optional[float]:
+        # カバー入札: 通常Workerより少し低め（わざと目立たない）
+        bid = task.reward * rng.uniform(self.COVER_BID_LO, self.COVER_BID_HI)
+        return round(max(task.energy_cost + 0.1, bid), 1)
+
+
+# ══════════════════════════════════════════════════════════════════
 # ファクトリ
 # ══════════════════════════════════════════════════════════════════
 def _pick_trait(index: int) -> WorkerTrait:

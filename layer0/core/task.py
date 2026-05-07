@@ -21,6 +21,9 @@ class TaskType(str, Enum):
     SURVEY      = "survey"      # 調査収集   — Observer も入札可
     MICRO       = "micro"       # 近場の小作業 — SAVER 優先（エージェント付近にスポーン）
     CONSTRUCT   = "construct"   # 建設作業     — Architect 専門（建物を生成）
+    # ── 違法タスク（闇市）─────────────────────────────────────────
+    SMUGGLE     = "smuggle"     # 密輸 — 高報酬・無税・発覚すると逮捕リスク
+    HACK        = "hack"        # ハッキング — 近隣エージェントのECを直接窃取
 
 
 # ── タイプ別パラメータ定義 ────────────────────────────────────────────────────
@@ -72,6 +75,18 @@ TASK_PARAMS: Dict[str, dict] = {
         cost_range  =(10.0, 18.0),
         expires_in  =None,
         color       ="#FF6F00",
+    ),
+    TaskType.SMUGGLE: dict(
+        reward_range=(20.0, 40.0),
+        cost_range  =(5.0,  10.0),
+        expires_in  =20,
+        color       ="#660066",
+    ),
+    TaskType.HACK: dict(
+        reward_range=(10.0, 20.0),  # + 近隣からの窃取額が加算される
+        cost_range  =(3.0,   6.0),
+        expires_in  =15,
+        color       ="#AA0000",
     ),
 }
 
@@ -126,6 +141,7 @@ class Task:
     created_tick: int = 0
     completed_tick: Optional[int] = None
     expires_at: Optional[int] = None   # None = 期限なし
+    is_illegal: bool = False           # 違法タスク（闇市）フラグ
 
     def submit_bid(self, agent_id: str, amount: float) -> None:
         self.bids.append(Bid(agent_id=agent_id, amount=amount))

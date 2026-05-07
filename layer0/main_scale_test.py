@@ -67,13 +67,23 @@ def generate_agents():
 def main():
     agents = generate_agents()
     print(f"=== HACS Scale Test ===")
-    print(f"  Agents : {len(agents)} (Worker x36 / Guardian x8 / Trader x7 / Observer x6 / Governor x3 / Medic x4 / Architect x3)")
+    print(f"  Agents : {len(agents)+3} (Worker x36 / Guardian x8 / Trader x7 / Observer x6 / Governor x3 / Medic x4 / Architect x3 / 公安 x3(偽装中))")
     print(f"  Ticks  : {TICKS}")
     print()
 
     sim = Simulator(seed=SEED)
     for a in agents:
         sim.add_agent(a)
+
+    # 公安 x 3 — Worker として偽装潜入（K1/K2 は通常公安、K3 は CHRONO公安）
+    koan_spots = [(6, 6), (13, 6), (6, 13)]
+    for i, (x, y) in enumerate(koan_spots):
+        is_chrono = (i == 2)
+        koan = Agent(
+            f"K{i+1}", AgentRole.WORKER, x=x, y=y,
+            expires_at=(TICKS // 2 + sim.rng.randint(15, 30)) if is_chrono else None,
+        )
+        sim.deploy_koan(koan, is_chrono=is_chrono)
 
     # ── 実行 & 計測 ──────────────────────────────────────────────
     tick_times = []
@@ -278,6 +288,37 @@ def main():
             b_income = sum(e.payload.get("income", 0) for e in bld_events if e.agent_id == a.agent_id)
             owned = sum(1 for owner in sim._buildings.values() if owner == a.agent_id)
             print(f"    {a.agent_id}: 建物{owned}棟  不労所得{b_income:.1f} EC  残高{a.balance:.1f} EC")
+
+    # ── 闇市 / 公安 統計 ──────────────────────────────────────────────
+    from layer0.schemas.event import EventType as ET
+    illegal_created   = [e for e in sim.event_log if e.event_type == ET.ILLEGAL_TASK_CREATED]
+    illegal_done      = [e for e in sim.event_log if e.event_type == ET.ILLEGAL_TASK_COMPLETED]
+    arrests           = [e for e in sim.event_log if e.event_type == ET.KOAN_ARREST]
+    informant_tips    = [e for e in sim.event_log if e.event_type == ET.INFORMANT_TIP]
+    koan_deployed     = [e for e in sim.event_log if e.event_type == ET.KOAN_DEPLOYED]
+    hack_done         = [e for e in illegal_done if e.payload.get("task_type") == "hack"]
+    total_stolen      = sum(e.payload.get("steal", 0) for e in hack_done)
+    total_illegal_rev = sum(e.payload.get("reward", 0) + e.payload.get("steal", 0)
+                            for e in illegal_done)
+    print(f"\n=== 闇市 / 公安 ===")
+    print(f"  公安配置        : {len(koan_deployed)}体（うちCHRONO公安 {sum(1 for e in koan_deployed if e.payload.get('is_chrono'))}体）")
+    print(f"  闇市タスク生成  : {len(illegal_created)}件")
+    print(f"  闇市タスク完了  : {len(illegal_done)}件（うちHACK {len(hack_done)}件）")
+    print(f"  HACK 窃取総額   : {total_stolen:.1f} EC")
+    print(f"  違法収益総額    : {total_illegal_rev:.1f} EC")
+    print(f"  逮捕件数        : {sim._arrest_count}件")
+    print(f"  没収総額        : {sim._total_seized:.1f} EC → 税プールへ")
+    print(f"  密告件数        : {len(informant_tips)}件（Observer INFORMANT）")
+    if arrests:
+        print(f"\n  逮捕一覧:")
+        for ar in arrests:
+            print(f"    tick={ar.tick:3d}  agent={ar.agent_id}  没収={ar.payload.get('seized',0):.1f} EC"
+                  f"  釈放tick={ar.payload.get('arrested_until','?')}")
+    currently_arrested = [a for a in sim.agents
+                          if a.arrested_until is not None and sim.tick <= a.arrested_until]
+    if currently_arrested:
+        print(f"  最終tick時点で逮捕中: {[a.agent_id for a in currently_arrested]}")
+    print(f"\n  現役公安エージェント: {sorted(sim._koan_agents)}")
 
     sim.save_log("logs/scale_test_events.jsonl")
     print(f"\nログ保存: logs/scale_test_events.jsonl")

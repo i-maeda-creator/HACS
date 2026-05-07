@@ -240,6 +240,21 @@ class EventReplayer:
                     status="idle",
                 )
 
+        elif et == EventType.ILLEGAL_TASK_COMPLETED:
+            if e.agent_id in self._agents:
+                a = self._agents[e.agent_id]
+                a.balance += p.get("reward", 0.0) + p.get("steal", 0.0)
+                a.last_tick = e.tick
+            victim_id = p.get("victim_id")
+            if victim_id and victim_id in self._agents:
+                self._agents[victim_id].balance = max(
+                    0.0, self._agents[victim_id].balance - p.get("steal", 0.0))
+
+        elif et == EventType.KOAN_ARREST:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance = p.get("balance_after",
+                    self._agents[e.agent_id].balance)
+
         elif et == EventType.TEMPORAL_EXPOSURE:
             share = p.get("share_per_agent", 0.0)
             for rid in p.get("close_agents", []):

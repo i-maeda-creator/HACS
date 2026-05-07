@@ -9,7 +9,7 @@ from layer0.core.task import Task, TaskStatus, TaskType, make_task, TASK_PARAMS,
 from layer0.core.economy import Economy
 from layer0.core.policy import PolicyEngine
 from layer0.core.safety import SafetyGate
-from layer0.core.ai import RoleAI, make_ai, GovernorAI, MedicAI, ArchitectAI
+from layer0.core.ai import RoleAI, make_ai, GovernorAI, MedicAI, ArchitectAI, KoanAI
 from layer0.schemas.event import Event, EventType
 from layer0.schemas.state import StateSnapshot, AgentSnapshot, TaskSnapshot, EconomySnapshot
 
@@ -53,12 +53,39 @@ class Simulator:
         self._chrono_count: int = 0
         # CHRONO 疑惑度: agent_id → float（15で正体発覚）
         self._chrono_suspicion: Dict[str, float] = {}
+        # ── 闇市 / 公安 ──────────────────────────────────────────────
+        # 公安エージェントのID集合（外部にはWorkerとして見える）
+        self._koan_agents: set = set()
+        # 公安の証拠データ: target_id → 累積証拠ポイント
+        self._koan_evidence: Dict[str, float] = {}
+        # 闇市タスクの次スポーンtick
+        self._next_illegal_spawn: int = self.rng.randint(15, 30)
+        # 逮捕統計
+        self._arrest_count: int = 0
+        self._total_seized: float = 0.0
 
     def add_agent(self, agent: Agent) -> None:
         idx = self._role_counts.get(agent.role, 0)
         self._role_counts[agent.role] = idx + 1
         self._ai[agent.agent_id] = make_ai(agent.role, index=idx)
         self.agents.append(agent)
+
+    def deploy_koan(self, agent: Agent, is_chrono: bool = False) -> None:
+        """公安を Worker として偽装配置する。is_chrono=True なら未来から来た公安。"""
+        agent.role = AgentRole.WORKER  # 表向きは Worker
+        idx = self._role_counts.get(AgentRole.WORKER, 0)
+        self._role_counts[AgentRole.WORKER] = idx + 1
+        ai = KoanAI(is_chrono=is_chrono)
+        self._ai[agent.agent_id] = ai
+        self._koan_agents.add(agent.agent_id)
+        self.agents.append(agent)
+        # CHRONO公安は時空疑惑の追跡対象にも登録
+        if is_chrono and agent.expires_at is not None:
+            self._chrono_suspicion[agent.agent_id] = 0.0
+        self._emit(EventType.KOAN_DEPLOYED, agent_id=agent.agent_id,
+                   data={"x": agent.x, "y": agent.y, "cover": "worker",
+                         "is_chrono": is_chrono,
+                         "expires_at": agent.expires_at})
 
     def spawn_task(self, task_type: Optional[TaskType] = None) -> Task:
         if task_type is None:
@@ -108,9 +135,15 @@ class Simulator:
 
     def step(self) -> StateSnapshot:
         self.tick += 1
+        # 逮捕期間終了エージェントを釈放
+        self._release_arrested()
         # 40% の確率でスポーン（うち MICRO はエージェント近傍）
         if self.rng.random() < 0.40:
             self.spawn_task()
+        # 闇市タスクをスポーン（15〜30tick毎）
+        if self.tick >= self._next_illegal_spawn:
+            self._spawn_illegal_task()
+            self._next_illegal_spawn = self.tick + self.rng.randint(12, 25)
         # 期限切れタスクを失効させる
         self._expire_tasks()
         # Policy params 自然減衰
@@ -143,8 +176,11 @@ class Simulator:
         # Governor policy proposals
         self._run_governor_proposals()
         self._run_auctions()
+        self._run_illegal_auctions()
+        self._run_koan_targeting()
         self._move_agents()
         self._work_agents()
+        self._process_illegal_completions()
         self._charge_agents()
         # Medic 治療サービス
         self._heal_agents()
@@ -156,6 +192,9 @@ class Simulator:
         self._maybe_chrono_arrival()
         self._update_chrono_suspicion()
         self._expire_chrono_agents()
+        # 公安メカニクス
+        self._update_koan_evidence()
+        self._process_koan_arrests()
         # パトロール給与（Guardian/Observer）
         self._pay_patrol_salary()
         # 建物収入（Architect — 累進課税 + 減価償却）
@@ -173,6 +212,8 @@ class Simulator:
 
     def _run_ai(self) -> None:
         for agent in self.agents:
+            if agent.arrested_until is not None and self.tick <= agent.arrested_until:
+                continue  # 逮捕中は行動不能
             ai = self._ai.get(agent.agent_id)
             if ai:
                 ai.decide(agent, self.world, self.tasks, self.agents, self.tick, self.rng)
@@ -541,6 +582,7 @@ class Simulator:
                              "experience_left": agent.experience})
             self.agents.remove(agent)
             del self._ai[agent.agent_id]
+            self._koan_agents.discard(agent.agent_id)  # CHRONO公安なら公安登録も解除
 
     def _heal_agents(self) -> None:
         for medic in self.agents:
@@ -591,10 +633,13 @@ class Simulator:
 
     def _run_auctions(self) -> None:
         from layer0.core.ai import WorkerAI, WorkerTrait
-        open_tasks = [t for t in self.tasks if t.status == TaskStatus.OPEN]
+        open_tasks = [t for t in self.tasks
+                      if t.status == TaskStatus.OPEN and not t.is_illegal]
         for task in open_tasks:
             task.bids.clear()
             for agent in self.agents:
+                if agent.arrested_until is not None and self.tick <= agent.arrested_until:
+                    continue  # 逮捕中は入札不可
                 # IDLE エージェントに加え、巡回中（MOVING かつ未アサイン）も入札可
                 can_bid = (agent.status == AgentStatus.IDLE or
                            (agent.status == AgentStatus.MOVING and agent.assigned_task_id is None))
@@ -638,6 +683,233 @@ class Simulator:
                     self._emit(EventType.TASK_ASSIGNED, agent_id=winner_id, task_id=task.task_id,
                                data={"target_x": task.x, "target_y": task.y, "bid": winning_bid,
                                      "win_prob": win_prob, "num_bidders": len(task.bids)})
+
+    # ── 闇市 / 公安メカニクス ──────────────────────────────────────────
+
+    # 違法タスク参加確率（trait別）
+    _ILLEGAL_TRAIT_PROB = {
+        "gambler":     0.45,
+        "rebel":       0.38,
+        "nihilist":    0.25,
+        "drifter":     0.20,
+        "opportunist": 0.15,
+        "hustler":     0.05,
+        "chrono":      0.10,   # 未来を知っているが慎重
+    }
+
+    def _spawn_illegal_task(self) -> None:
+        """闇市タスクをグリッドの人目につかない場所にスポーン。"""
+        from layer0.core.ai import WorkerAI, WorkerTrait
+        # HACK は人が集まる場所（中央）、SMUGGLE は外周付近
+        task_type = self.rng.choice([TaskType.SMUGGLE, TaskType.HACK])
+        if task_type == TaskType.HACK:
+            # エージェントが多い場所の近く（攻撃対象が必要）
+            if not self.agents:
+                return
+            ref = self.rng.choice(self.agents)
+            for _ in range(20):
+                x = max(1, min(18, ref.x + self.rng.randint(-3, 3)))
+                y = max(1, min(18, ref.y + self.rng.randint(-3, 3)))
+                if self.world.is_passable(x, y):
+                    break
+            else:
+                x, y = ref.x, ref.y
+        else:
+            # 外周付近の暗がりにスポーン
+            for _ in range(30):
+                x = self.rng.choice([self.rng.randint(1, 4), self.rng.randint(15, 18)])
+                y = self.rng.randint(1, 18)
+                if self.world.is_passable(x, y):
+                    break
+            else:
+                x, y = 2, 2
+
+        params = TASK_PARAMS[task_type]
+        r_lo, r_hi = params["reward_range"]
+        c_lo, c_hi = params["cost_range"]
+        reward    = round(self.rng.uniform(r_lo, r_hi), 1)
+        cost      = round(self.rng.uniform(c_lo, c_hi), 1)
+        expires_at = self.tick + params["expires_in"]
+
+        t = Task(
+            task_id=str(__import__("uuid").uuid4())[:8],
+            x=x, y=y, reward=reward, energy_cost=cost,
+            task_type=task_type, created_tick=self.tick,
+            expires_at=expires_at, is_illegal=True,
+        )
+        self.tasks.append(t)
+        self._emit(EventType.ILLEGAL_TASK_CREATED, task_id=t.task_id,
+                   data={"x": x, "y": y, "reward": reward,
+                         "task_type": task_type.value, "expires_at": expires_at})
+
+    def _run_illegal_auctions(self) -> None:
+        """闇市入札。公安は参加しない。逮捕中も参加不可。"""
+        from layer0.core.ai import WorkerAI, WorkerTrait
+        open_illegal = [t for t in self.tasks
+                        if t.is_illegal and t.status == TaskStatus.OPEN]
+        for task in open_illegal:
+            task.bids.clear()
+            for agent in self.agents:
+                if agent.arrested_until is not None and self.tick <= agent.arrested_until:
+                    continue
+                if agent.agent_id in self._koan_agents:
+                    continue  # 公安は参加しない
+                can_bid = (agent.status == AgentStatus.IDLE or
+                           (agent.status == AgentStatus.MOVING and agent.assigned_task_id is None))
+                if not can_bid or agent.energy <= task.energy_cost:
+                    continue
+                ai = self._ai.get(agent.agent_id)
+                if not isinstance(ai, WorkerAI):
+                    continue
+                prob = self._ILLEGAL_TRAIT_PROB.get(ai.trait.value, 0.0)
+                if self.rng.random() > prob:
+                    continue
+                # 高めに入札（リスクに見合う報酬への欲）
+                bid = round(task.reward * self.rng.uniform(0.85, 1.20), 1)
+                task.submit_bid(agent.agent_id, bid)
+            winner_id = task.resolve_auction(rng=self.rng)
+            if winner_id:
+                winner = self._get_agent(winner_id)
+                if winner:
+                    winner.assigned_task_id = task.task_id
+                    winner.status = AgentStatus.MOVING
+                    winner.target_x = task.x
+                    winner.target_y = task.y
+
+    def _process_illegal_completions(self) -> None:
+        """違法タスク完了処理。税なし、HACK は近隣からEC窃取。公安が目撃すると証拠蓄積。"""
+        for agent in self.agents:
+            if agent.status != AgentStatus.WORKING:
+                continue
+            task = self._get_task(agent.assigned_task_id)
+            if task is None or not task.is_illegal:
+                continue
+            agent.spend_energy(Agent.WORK_COST)
+            # 違法報酬は無税（全額受取）
+            agent.balance += task.reward
+            steal_amount = 0.0
+            victim_id = None
+            if task.task_type == TaskType.HACK:
+                # 近隣から EC 窃取（公安以外が対象）
+                victims = sorted(
+                    [a for a in self.agents
+                     if a.agent_id != agent.agent_id
+                     and a.agent_id not in self._koan_agents
+                     and abs(a.x - agent.x) + abs(a.y - agent.y) <= 3],
+                    key=lambda a: abs(a.x - agent.x) + abs(a.y - agent.y)
+                )
+                if victims:
+                    victim = victims[0]
+                    steal_amount = round(min(victim.balance, self.rng.uniform(8.0, 15.0)), 1)
+                    victim.balance = max(0.0, victim.balance - steal_amount)
+                    agent.balance += steal_amount
+                    victim_id = victim.agent_id
+            task.status = TaskStatus.COMPLETED
+            task.completed_tick = self.tick
+            agent.experience += 1
+            self._emit(EventType.ILLEGAL_TASK_COMPLETED, agent_id=agent.agent_id,
+                       task_id=task.task_id,
+                       data={"reward": task.reward, "steal": steal_amount,
+                             "victim_id": victim_id,
+                             "task_type": task.task_type.value,
+                             "balance": round(agent.balance, 1)})
+            # 近くの公安が目撃 → 証拠蓄積
+            ev_gain = 6.0 if task.task_type == TaskType.HACK else 4.0
+            for koan_id in self._koan_agents:
+                koan = self._get_agent(koan_id)
+                if koan and abs(koan.x - agent.x) + abs(koan.y - agent.y) <= 4:
+                    self._koan_evidence[agent.agent_id] = (
+                        self._koan_evidence.get(agent.agent_id, 0.0) + ev_gain)
+            agent.assigned_task_id = None
+            agent.target_x = None
+            agent.target_y = None
+            agent.status = AgentStatus.IDLE
+
+    def _update_koan_evidence(self) -> None:
+        """証拠自然減衰 + Observer INFORMANT による密告。"""
+        from layer0.core.ai import ObserverAI, ObserverPersonality
+        # 自然減衰（容疑者が何もしなければ疑惑は薄れる）
+        for aid in list(self._koan_evidence):
+            self._koan_evidence[aid] = max(0.0, self._koan_evidence[aid] - 0.1)
+            if self._koan_evidence[aid] == 0.0:
+                del self._koan_evidence[aid]
+        # Observer INFORMANT 性格 → 近隣公安に密告（30%/tick）
+        for obs in self.agents:
+            if obs.role != AgentRole.OBSERVER:
+                continue
+            obs_ai = self._ai.get(obs.agent_id)
+            if not isinstance(obs_ai, ObserverAI):
+                continue
+            if obs_ai.personality != ObserverPersonality.INFORMANT:
+                continue
+            if self.rng.random() > 0.30:
+                continue
+            nearby_koan = [a for a in self.agents
+                           if a.agent_id in self._koan_agents
+                           and abs(a.x - obs.x) + abs(a.y - obs.y) <= 5]
+            if not nearby_koan:
+                continue
+            suspects = [aid for aid, ev in self._koan_evidence.items() if ev > 0.0]
+            suspects_nearby = [sid for sid in suspects
+                               if (sa := self._get_agent(sid)) and
+                               abs(sa.x - obs.x) + abs(sa.y - obs.y) <= 5]
+            for sid in suspects_nearby[:1]:
+                self._koan_evidence[sid] = self._koan_evidence.get(sid, 0.0) + 5.0
+                self._emit(EventType.INFORMANT_TIP, agent_id=obs.agent_id,
+                           data={"suspect_id": sid,
+                                 "evidence_gain": 5.0,
+                                 "koan_ids": [k.agent_id for k in nearby_koan]})
+
+    def _run_koan_targeting(self) -> None:
+        """公安が最重要容疑者を追尾。"""
+        if not self._koan_evidence:
+            return
+        top_id = max(self._koan_evidence, key=self._koan_evidence.get)
+        target = self._get_agent(top_id)
+        if target is None:
+            return
+        for koan_id in self._koan_agents:
+            koan = self._get_agent(koan_id)
+            if koan and koan.status == AgentStatus.IDLE:
+                koan.target_x = target.x
+                koan.target_y = target.y
+                koan.status = AgentStatus.MOVING
+
+    def _process_koan_arrests(self) -> None:
+        """証拠閾値到達 → 逮捕: 残高60%没収 + 15tick 活動停止。"""
+        ARREST_THRESHOLD = 10.0
+        ARREST_DURATION  = 15
+        SEIZE_RATIO      = 0.60
+        to_arrest = [aid for aid, ev in list(self._koan_evidence.items())
+                     if ev >= ARREST_THRESHOLD]
+        for aid in to_arrest:
+            agent = self._get_agent(aid)
+            if agent is None:
+                self._koan_evidence.pop(aid, None)
+                continue
+            if agent.arrested_until is not None and self.tick <= agent.arrested_until:
+                continue  # 既に逮捕中
+            seized = round(agent.balance * SEIZE_RATIO, 1)
+            agent.balance = max(0.0, agent.balance - seized)
+            self.economy.tax_pool += seized
+            agent.arrested_until = self.tick + ARREST_DURATION
+            agent.status = AgentStatus.IDLE
+            agent.assigned_task_id = None
+            agent.target_x = None
+            agent.target_y = None
+            self._koan_evidence.pop(aid, None)
+            self._arrest_count += 1
+            self._total_seized += seized
+            self._emit(EventType.KOAN_ARREST, agent_id=aid,
+                       data={"seized": seized,
+                             "balance_after": round(agent.balance, 1),
+                             "arrested_until": agent.arrested_until})
+
+    def _release_arrested(self) -> None:
+        """逮捕期間終了エージェントを釈放。"""
+        for agent in self.agents:
+            if agent.arrested_until is not None and self.tick > agent.arrested_until:
+                agent.arrested_until = None
 
     def _update_chrono_suspicion(self) -> None:
         """CHRONO エージェントの正体発覚疑惑度を更新。Guardian 近接・連勝で上昇、自然減衰。"""
@@ -702,6 +974,10 @@ class Simulator:
                          "share_per_agent": total_share,
                          "close_agents": [a.agent_id for a in close],
                          "x": agent.x, "y": agent.y})
+        # CHRONO公安が発覚 → 追跡中の証拠も全消去（被疑者は逃亡）
+        if agent.agent_id in self._koan_agents:
+            self._koan_agents.discard(agent.agent_id)
+            self._koan_evidence.clear()  # 捜査情報が漏洩 → 証拠隠滅
         self.agents.remove(agent)
         self._ai.pop(agent.agent_id, None)
         self._temporal_loans.pop(agent.agent_id, None)
@@ -733,6 +1009,8 @@ class Simulator:
             if task is None:
                 agent.status = AgentStatus.IDLE
                 continue
+            if task.is_illegal:
+                continue  # 違法タスクは _process_illegal_completions() で処理
             agent.spend_energy(Agent.WORK_COST)
             net = task.reward * (1 - self.policy_params["tax_rate"])
             agent.balance += net

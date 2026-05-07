@@ -38,6 +38,12 @@ class EventType(str, Enum):
     CHRONO_ARRIVAL        = "ChronoArrival"   # 未来エージェントが時間軸に出現
     CHRONO_DEPARTURE      = "ChronoDeparture" # 未来エージェントが消滅
     TEMPORAL_EXPOSURE     = "TemporalExposure"# 正体発覚 → 知識爆発・大規模パラドックス
+    # ── 闇市 / 公安 ──────────────────────────────────────────────────
+    ILLEGAL_TASK_CREATED  = "IllegalTaskCreated"  # 闇市タスクがスポーン
+    ILLEGAL_TASK_COMPLETED = "IllegalTaskCompleted" # 違法タスク完了（無税）
+    KOAN_DEPLOYED         = "KoanDeployed"    # 公安がWorkerとして潜入配置
+    KOAN_ARREST           = "KoanArrest"      # 逮捕執行 — 残高没収・活動停止
+    INFORMANT_TIP         = "InformantTip"    # Observer が公安に密告
 
 
 # EventType → MQTT トピックのマッピング
