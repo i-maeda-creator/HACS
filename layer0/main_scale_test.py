@@ -12,46 +12,46 @@ SEED  = 42
 
 
 def generate_agents():
-    """20×20グリッドに50体を分散配置。"""
+    """20×20グリッドに60体を分散配置。"""
     agents = []
-    positions = []
 
-    def pos(x, y):
-        positions.append((x, y))
-        return x, y
-
-    # Worker x 30（グリッド全体に均等分散）
+    # Worker x 36（6×6 グリッド均等配置）
     worker_spots = [
-        (2,2),(5,2),(8,2),(11,2),(14,2),(17,2),
-        (2,6),(5,6),(8,6),(11,6),(14,6),(17,6),
-        (2,10),(5,10),(8,10),(11,10),(14,10),(17,10),
-        (2,14),(5,14),(8,14),(11,14),(14,14),(17,14),
-        (2,17),(5,17),(8,17),(11,17),(14,17),(17,17),
+        (2,1),(5,1),(8,1),(11,1),(14,1),(17,1),
+        (2,4),(5,4),(8,4),(11,4),(14,4),(17,4),
+        (2,8),(5,8),(8,8),(11,8),(14,8),(17,8),
+        (2,11),(5,11),(8,11),(11,11),(14,11),(17,11),
+        (2,15),(5,15),(8,15),(11,15),(14,15),(17,15),
+        (2,18),(5,18),(8,18),(11,18),(14,18),(17,18),
     ]
-    for i,(x,y) in enumerate(worker_spots):
+    for i, (x, y) in enumerate(worker_spots):
         agents.append(Agent(f"W{i+1:02d}", AgentRole.WORKER, x=x, y=y))
 
-    # Guardian x 6（外周パトロール開始点）
-    guardian_spots = [(3,3),(16,3),(16,16),(3,16),(10,3),(10,16)]
-    for i,(x,y) in enumerate(guardian_spots):
+    # Guardian x 8（外周8点）
+    guardian_spots = [
+        (2,2),(10,2),(17,2),
+        (2,10),(17,10),
+        (2,17),(10,17),(17,17),
+    ]
+    for i, (x, y) in enumerate(guardian_spots):
         agents.append(Agent(f"G{i+1}", AgentRole.GUARDIAN, x=x, y=y))
 
-    # Trader x 6
-    trader_spots = [(6,6),(13,6),(6,13),(13,13),(6,10),(13,10)]
-    for i,(x,y) in enumerate(trader_spots):
+    # Trader x 7
+    trader_spots = [(5,5),(14,5),(5,14),(14,14),(9,9),(5,9),(14,9)]
+    for i, (x, y) in enumerate(trader_spots):
         agents.append(Agent(f"T{i+1}", AgentRole.TRADER, x=x, y=y))
 
-    # Observer x 5（4象限 + 中央）
-    observer_spots = [(3,3),(16,3),(3,16),(16,16),(9,9)]
-    for i,(x,y) in enumerate(observer_spots):
+    # Observer x 6（4象限 + 南北中央）
+    observer_spots = [(3,3),(16,3),(3,16),(16,16),(9,2),(9,17)]
+    for i, (x, y) in enumerate(observer_spots):
         agents.append(Agent(f"O{i+1}", AgentRole.OBSERVER, x=x, y=y))
 
     # Governor x 3
-    governor_spots = [(10,10),(5,5),(15,15)]
-    for i,(x,y) in enumerate(governor_spots):
+    governor_spots = [(10,10),(4,4),(15,15)]
+    for i, (x, y) in enumerate(governor_spots):
         agents.append(Agent(f"V{i+1}", AgentRole.GOVERNOR, x=x, y=y))
 
-    return agents  # 30+6+6+5+3 = 50
+    return agents  # 36+8+7+6+3 = 60
 
 
 def main():
@@ -100,15 +100,20 @@ def main():
         avg = sum(balances)/len(balances)
         print(f"    {role:10s}: avg={avg:6.1f} EC  n={len(balances)}")
 
-    # Governor 提案
+    # Governor 投票・可決
     from layer0.schemas.event import EventType
-    proposals = [e for e in sim.event_log
-                 if e.event_type == EventType.POLICY_CHANGED
-                 and e.payload.get("source") == "governor"]
-    print(f"\n  Governor 政策提案: {len(proposals)}件")
-    for p in proposals[:5]:
-        prop = p.payload.get("proposal", {})
-        print(f"    tick={p.tick:3d}  {prop.get('action','?'):16s}  {prop.get('reason','')}")
+    votes      = [e for e in sim.event_log if e.event_type == EventType.VOTE_SUBMITTED]
+    passed     = [e for e in sim.event_log if e.event_type == EventType.VOTE_PASSED]
+    market_evs = [e for e in sim.event_log if e.event_type == EventType.MARKET_EVENT]
+    print(f"\n  Governor 投票提出: {len(votes)}件  可決: {len(passed)}件")
+    for p in passed[:5]:
+        cf = p.payload.get("consensus_factor", 1.0)
+        print(f"    tick={p.tick:3d}  {p.payload.get('action','?'):16s}  "
+              f"voters={p.payload.get('voters')}  factor={cf:.1f}x")
+    print(f"  市場イベント: {len(market_evs)}件")
+    for m in market_evs[:6]:
+        print(f"    tick={m.tick:3d}  {m.payload.get('event','?')}"
+              f"  multiplier={m.payload.get('reward_multiplier','')}")
 
     # ── オークション詳細 ────────────────────────────────────────
     print(f"\n=== オークション詳細 ===")
