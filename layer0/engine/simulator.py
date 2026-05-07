@@ -416,15 +416,21 @@ class Simulator:
             agent.balance += net
             task.status = TaskStatus.COMPLETED
             task.completed_tick = self.tick
-            # 税収の30%をGovernorへ等分配分
+            # 税収の30%をGovernorへ — KPIスコアで倍率調整（良い都市統治ほど多く稼げる）
             gov_cut = self.economy.pay_reward(agent.agent_id, task.reward, task.task_id, self.tick)
             if governors and gov_cut > 0:
-                share = round(gov_cut / len(governors), 2)
+                scores   = self.policy.score(self.agents, self.tasks)
+                kpi      = (scores.get("efficiency", 1.0) + scores.get("equality", 1.0)) / 2
+                kpi_factor = round(max(0.4, min(1.3, kpi)), 3)  # 0.4〜1.3の範囲
+                adjusted_cut = round(gov_cut * kpi_factor, 2)
+                # KPI調整後の余剰 or 不足は税プールへ
+                self.economy.tax_pool += round(gov_cut - adjusted_cut, 2)
+                share = round(adjusted_cut / len(governors), 2)
                 for gov in governors:
                     gov.balance += share
                     self._emit(EventType.GOVERNANCE_REWARD, agent_id=gov.agent_id,
                                data={"reason": "tax_dividend", "reward": share,
-                                     "task_id": task.task_id})
+                                     "kpi_factor": kpi_factor, "task_id": task.task_id})
             # CONSTRUCT完了 → 建物を登録
             if task.task_type == TaskType.CONSTRUCT:
                 self._buildings[(task.x, task.y)] = agent.agent_id

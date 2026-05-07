@@ -410,22 +410,34 @@ class GovernorAI(RoleAI):
         def _can_propose(action: str) -> bool:
             return tick - self._last_proposal.get(action, -999) >= self._cooldown
 
-        if tax_pool > 400 and _can_propose("basic_income"):
-            self._last_proposal["basic_income"] = tick
-            return {"action": "basic_income", "value": tax_pool,
-                    "reason": f"税プール={tax_pool:.0f} EC - 蓄積分を全市民へ再分配"}
+        # KPI = (効率性 + 平等性) / 2 — Governor の取り分に直結するため優先度が高い
+        kpi = (completion_rate + (1.0 - gini)) / 2
+
+        # KPIが低い緊急時は市場刺激を最優先
+        if completion_rate < 0.6 and _can_propose("reward_boost"):
+            self._last_proposal["reward_boost"] = tick
+            return {"action": "reward_boost", "value": 1.2,
+                    "reason": f"完了率={completion_rate:.0%} — KPI危機: タスク不成立多発"}
+        # Worker 稼働率低下（→ KPI低下 → 自分の取り分も減る）
         if worker_idle_ratio > 0.5 and _can_propose("worker_support"):
             self._last_proposal["worker_support"] = tick
             return {"action": "worker_support", "value": round(worker_idle_ratio, 2),
                     "reason": f"Worker稼働率低下 - {(1 - worker_idle_ratio) * 100:.0f}%のみ受注"}
-        if gini > 0.25 and _can_propose("tax_increase"):
+        # 税プール過剰 → 再分配（Gini改善 → 平等性UP → KPI UP → 自分の取り分UP）
+        if tax_pool > 400 and gini > 0.15 and _can_propose("basic_income"):
+            self._last_proposal["basic_income"] = tick
+            return {"action": "basic_income", "value": tax_pool,
+                    "reason": f"税プール={tax_pool:.0f} EC & Gini={gini:.2f} — 再分配でKPI改善"}
+        # 格差拡大は KPI 平等性を直撃（ただし乱発すると worker が動けなくなる）
+        if gini > 0.30 and kpi > 0.6 and _can_propose("tax_increase"):
             self._last_proposal["tax_increase"] = tick
             return {"action": "tax_increase", "value": 0.07,
-                    "reason": f"Gini={gini:.2f} - 格差拡大を検知"}
-        if completion_rate < 0.6 and _can_propose("reward_boost"):
-            self._last_proposal["reward_boost"] = tick
-            return {"action": "reward_boost", "value": 1.2,
-                    "reason": f"完了率={completion_rate:.0%} - タスク不成立多発"}
+                    "reason": f"Gini={gini:.2f} — 格差是正 (KPI={kpi:.2f})"}
+        # 税プール安全圏での余裕ある再分配
+        if tax_pool > 600 and _can_propose("basic_income"):
+            self._last_proposal["basic_income"] = tick
+            return {"action": "basic_income", "value": tax_pool,
+                    "reason": f"税プール={tax_pool:.0f} EC — 余剰再分配"}
         return None
 
 
