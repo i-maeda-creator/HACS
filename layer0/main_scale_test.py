@@ -121,9 +121,28 @@ def main():
     assigned_events = [e for e in sim.event_log if e.event_type == EventType.TASK_ASSIGNED]
     done_events     = [e for e in sim.event_log if e.event_type == EventType.TASK_COMPLETED]
 
-    n_tasks = len([e for e in sim.event_log if e.event_type == EventType.TASK_CREATED])
+    created_events = [e for e in sim.event_log
+                      if e.event_type == EventType.TASK_CREATED
+                      and e.payload.get("event") != "expired"]
+    expired_count = sum(1 for t in sim.tasks if t.status.value == "expired")
+    n_tasks = len(created_events)
     avg_bidders = len(bid_events) / n_tasks if n_tasks else 0
-    print(f"  タスク数: {n_tasks}  総入札数: {len(bid_events)}  競争率: {avg_bidders:.1f}x")
+    print(f"  タスク数: {n_tasks}  総入札数: {len(bid_events)}  競争率: {avg_bidders:.1f}x  期限切れ: {expired_count}")
+
+    # タスクタイプ別集計
+    from collections import Counter
+    type_counts   = Counter(e.payload.get("task_type", "?") for e in created_events)
+    type_done     = Counter(t.task_type.value for t in sim.tasks if t.status.value == "completed")
+    type_expired  = Counter(t.task_type.value for t in sim.tasks if t.status.value == "expired")
+    print(f"\n  タスクタイプ別:")
+    print(f"  {'Type':10s}  {'生成':>5}  {'完了':>5}  {'期限切':>5}  完了率")
+    print(f"  {'-'*42}")
+    for ttype in ["standard","heavy","urgent","trade","security","survey"]:
+        n   = type_counts.get(ttype, 0)
+        d   = type_done.get(ttype, 0)
+        ex  = type_expired.get(ttype, 0)
+        rate = f"{d/n*100:.0f}%" if n > 0 else "-"
+        print(f"  {ttype:10s}  {n:5d}  {d:5d}  {ex:5d}  {rate}")
 
     role_map = {a.agent_id: a.role.value for a in sim.agents}
     by_role_bids = defaultdict(list)

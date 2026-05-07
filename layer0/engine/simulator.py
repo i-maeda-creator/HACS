@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 from pathlib import Path
 from layer0.core.world import World, Cell
 from layer0.core.agent import Agent, AgentRole, AgentStatus
-from layer0.core.task import Task, TaskStatus, make_task
+from layer0.core.task import Task, TaskStatus, TaskType, make_task, TASK_PARAMS, TASK_TYPE_WEIGHTS
 from layer0.core.economy import Economy
 from layer0.core.policy import PolicyEngine
 from layer0.core.safety import SafetyGate
@@ -49,23 +49,46 @@ class Simulator:
         self._ai[agent.agent_id] = make_ai(agent.role, index=idx)
         self.agents.append(agent)
 
-    def spawn_task(self) -> Task:
+    def spawn_task(self, task_type: Optional[TaskType] = None) -> Task:
         while True:
             x = self.rng.randint(1, self.world.width - 2)
             y = self.rng.randint(1, self.world.height - 2)
             if self.world.is_passable(x, y):
                 break
-        reward = round(self.rng.uniform(8.0, 20.0) * self.policy_params["reward_multiplier"], 1)
-        cost = round(self.rng.uniform(1.0, 5.0), 1)
-        t = make_task(x, y, reward=reward, energy_cost=cost, tick=self.tick)
+        # タスクタイプを重み付きランダムで選択
+        if task_type is None:
+            types, weights = zip(*TASK_TYPE_WEIGHTS)
+            cumulative = []
+            acc = 0.0
+            for w in weights:
+                acc += w
+                cumulative.append(acc)
+            r = self.rng.random()
+            task_type = next(t for t, c in zip(types, cumulative) if r <= c)
+
+        params = TASK_PARAMS[task_type]
+        r_lo, r_hi = params["reward_range"]
+        c_lo, c_hi = params["cost_range"]
+        reward = round(self.rng.uniform(r_lo, r_hi) * self.policy_params["reward_multiplier"], 1)
+        cost   = round(self.rng.uniform(c_lo, c_hi), 1)
+        expires_in = params["expires_in"]
+
+        t = make_task(x, y, reward=reward, energy_cost=cost,
+                      tick=self.tick, task_type=task_type, expires_in=expires_in)
         self.tasks.append(t)
-        self._emit(EventType.TASK_CREATED, task_id=t.task_id, data={"x": x, "y": y, "reward": reward})
+        self._emit(EventType.TASK_CREATED, task_id=t.task_id,
+                   data={"x": x, "y": y, "reward": reward,
+                         "task_type": task_type.value,
+                         "expires_at": t.expires_at})
         return t
 
     def step(self) -> StateSnapshot:
         self.tick += 1
-        if self.tick % 5 == 0:
+        # 40% の確率でスポーン（平均 2.5 tick に 1 件）
+        if self.rng.random() < 0.40:
             self.spawn_task()
+        # 期限切れタスクを失効させる
+        self._expire_tasks()
         # Policy params 自然減衰
         pp = self.policy_params
         pp["reward_multiplier"] = max(1.0, pp["reward_multiplier"] - 0.008)
@@ -186,6 +209,14 @@ class Simulator:
                              details={"duration": duration,
                                       "reward_multiplier": self.policy_params["reward_multiplier"]})
 
+    def _expire_tasks(self) -> None:
+        """期限切れタスク（URGENT など）を失効させる。"""
+        for t in self.tasks:
+            if t.is_expired(self.tick):
+                t.status = TaskStatus.EXPIRED
+                self._emit(EventType.TASK_CREATED, task_id=t.task_id,
+                           data={"event": "expired", "task_type": t.task_type.value})
+
     def _revert_market_event(self) -> None:
         if self._market_event:
             orig = self._market_event.get("orig_multiplier", 1.0)
@@ -201,15 +232,22 @@ class Simulator:
             task.bids.clear()
             for agent in self.agents:
                 if agent.status == AgentStatus.IDLE and agent.energy > task.energy_cost:
+                    # タスクタイプ別役職ボーナス確認（0.0 = 入札不可）
+                    role_bonus = task.role_bid_bonus(agent.role)
+                    if role_bonus == 0.0:
+                        continue
                     ai = self._ai.get(agent.agent_id)
                     bid_amount = ai.get_bid(task, agent, self.rng) if ai else None
                     if bid_amount is None:
                         continue
+                    # 役職ボーナス適用
+                    bid_amount *= role_bonus
                     if agent.role == AgentRole.WORKER:
                         bid_amount += self.policy_params["worker_bid_bonus"]
                     bid = round(bid_amount, 1)
                     task.submit_bid(agent.agent_id, bid)
-                    self._emit(EventType.BID_SUBMITTED, agent_id=agent.agent_id, task_id=task.task_id, data={"bid": bid})
+                    self._emit(EventType.BID_SUBMITTED, agent_id=agent.agent_id, task_id=task.task_id,
+                               data={"bid": bid, "task_type": task.task_type.value})
             winner_id = task.resolve_auction()
             if winner_id:
                 winner = self._get_agent(winner_id)
@@ -284,7 +322,8 @@ class Simulator:
         return next((t for t in self.tasks if t.task_id == task_id), None)
 
     def _snapshot(self) -> StateSnapshot:
-        active = [t for t in self.tasks if t.status != TaskStatus.COMPLETED]
+        active = [t for t in self.tasks
+                  if t.status not in (TaskStatus.COMPLETED, TaskStatus.EXPIRED)]
         return StateSnapshot(
             tick=self.tick,
             agents=[AgentSnapshot(
@@ -294,7 +333,8 @@ class Simulator:
             tasks=[TaskSnapshot(
                 task_id=t.task_id, x=t.x, y=t.y,
                 reward=t.reward, energy_cost=t.energy_cost,
-                status=t.status.value, assigned_to=t.assigned_to
+                status=t.status.value, assigned_to=t.assigned_to,
+                task_type=t.task_type.value, expires_at=t.expires_at,
             ) for t in active],
             economy=EconomySnapshot(
                 tick=self.tick,
@@ -307,6 +347,7 @@ class Simulator:
 
     def _calc_metrics(self) -> Dict:
         completed = [t for t in self.tasks if t.status == TaskStatus.COMPLETED]
+        expired   = [t for t in self.tasks if t.status == TaskStatus.EXPIRED]
         total = len(self.tasks)
         balances = [a.balance for a in self.agents]
         mean_b = sum(balances) / len(balances) if balances else 0
@@ -317,7 +358,8 @@ class Simulator:
         scores = self.policy.score(self.agents, self.tasks)
         return {
             "task_completion_rate": round(len(completed) / total, 2) if total else 0,
-            "open_tasks": len([t for t in self.tasks if t.status == "open"]),
+            "task_expired_count": len(expired),
+            "open_tasks": len([t for t in self.tasks if t.status == TaskStatus.OPEN]),
             "total_energy": round(sum(a.energy for a in self.agents), 1),
             "mean_balance": round(mean_b, 1),
             "gini": round(gini, 3),

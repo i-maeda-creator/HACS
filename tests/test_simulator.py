@@ -30,11 +30,14 @@ def test_event_log_grows(sim):
     assert len(sim.event_log) > 0
 
 
-def test_task_spawned_every_5_ticks(sim):
-    sim.run(10)
+def test_tasks_spawned(sim):
+    sim.run(50)
     from layer0.schemas.event import EventType
-    task_events = [e for e in sim.event_log if e.event_type == EventType.TASK_CREATED]
-    assert len(task_events) == 2  # tick 5 と tick 10
+    task_events = [e for e in sim.event_log
+                   if e.event_type == EventType.TASK_CREATED
+                   and e.payload.get("event") != "expired"]
+    # 40% 確率スポーン → 50 tick で概ね 5〜40 件
+    assert 5 <= len(task_events) <= 50
 
 
 def test_sequence_ids_unique(sim):

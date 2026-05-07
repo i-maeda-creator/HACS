@@ -21,6 +21,8 @@ class TaskSnapshot(BaseModel):
     energy_cost: float
     status: str
     assigned_to: Optional[str] = None
+    task_type: str = "standard"
+    expires_at: Optional[int] = None
 
 
 class EconomySnapshot(BaseModel):
