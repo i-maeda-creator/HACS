@@ -1,6 +1,7 @@
 from __future__ import annotations
 import random
-from typing import TYPE_CHECKING, Dict, Optional, Tuple
+from enum import Enum
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 if TYPE_CHECKING:
     from layer0.core.agent import Agent
@@ -10,17 +11,42 @@ if TYPE_CHECKING:
 from layer0.core.agent import AgentRole, AgentStatus
 
 
+# ── Worker 性格特性 ──────────────────────────────────────────────
+class WorkerTrait(str, Enum):
+    HUSTLER     = "hustler"     # 稼ぎ重視。高い熱意で何でも入札
+    SAVER       = "saver"       # エネルギー節約家。充電閾値高め・近場専門
+    SPECIALIST  = "specialist"  # HEAVY タスクのエキスパート
+    EXPLORER    = "explorer"    # 遠いタスクも厭わず広域をカバー
+    OPPORTUNIST = "opportunist" # 競争率の低いタスクを狙うスナイパー
+
+TRAIT_LABELS = {
+    WorkerTrait.HUSTLER:     "稼ぎ師",
+    WorkerTrait.SAVER:       "節約家",
+    WorkerTrait.SPECIALIST:  "重作業専門",
+    WorkerTrait.EXPLORER:    "探索者",
+    WorkerTrait.OPPORTUNIST: "機会主義者",
+}
+
+# 各特性の出現比率
+TRAIT_WEIGHTS = [
+    (WorkerTrait.HUSTLER,     0.25),
+    (WorkerTrait.SAVER,       0.20),
+    (WorkerTrait.SPECIALIST,  0.20),
+    (WorkerTrait.EXPLORER,    0.20),
+    (WorkerTrait.OPPORTUNIST, 0.15),
+]
+
+
 class RoleAI:
     """全役職の基底クラス。"""
 
     def decide(self, agent: "Agent", world: "World",
                tasks: list, agents: list,
                tick: int, rng: random.Random) -> None:
-        """毎 tick 呼ばれる。agent の target_x/y / status を直接更新してよい。"""
+        pass
 
     def get_bid(self, task: "Task", agent: "Agent",
                 rng: random.Random) -> Optional[float]:
-        """入札額を返す。None なら入札しない。"""
         return task.energy_cost + rng.uniform(0, 2)
 
     def _go_charge(self, agent: "Agent", world: "World") -> bool:
@@ -34,33 +60,92 @@ class RoleAI:
 
 # ── Worker ──────────────────────────────────────────────────────
 class WorkerAI(RoleAI):
-    """近くの高報酬タスクを優先し、sector 熱量マップで入札を最適化する。"""
+    """性格特性によって入札戦略が異なる Worker。"""
 
-    CHARGE_THRESHOLD = 30.0
+    # 特性別充電閾値
+    _CHARGE_THRESHOLD = {
+        WorkerTrait.HUSTLER:     25.0,  # ギリギリまで働く
+        WorkerTrait.SAVER:       45.0,  # 早めに充電
+        WorkerTrait.SPECIALIST:  30.0,
+        WorkerTrait.EXPLORER:    20.0,  # 遠征重視で充電後回し
+        WorkerTrait.OPPORTUNIST: 30.0,
+    }
 
-    def __init__(self):
-        # sector (x//5, y//5) ごとの報酬 EMA — 学習で蓄積
+    def __init__(self, trait: WorkerTrait = WorkerTrait.HUSTLER):
+        self.trait = trait
         self._sector_avg: dict = {}
+        self._bid_counts: Dict[str, int] = {}  # task_id → 競合入札数の観測
+
+    @property
+    def charge_threshold(self) -> float:
+        return self._CHARGE_THRESHOLD[self.trait]
 
     def decide(self, agent, world, tasks, agents, tick, rng):
-        # 可視タスクから sector 報酬を学習
         for t in tasks:
             if hasattr(t, 'status') and t.status.value == 'open':
                 key = (t.x // 5, t.y // 5)
                 prior = self._sector_avg.get(key, t.reward)
                 self._sector_avg[key] = prior * 0.85 + t.reward * 0.15
-        if agent.status == AgentStatus.IDLE and agent.energy < self.CHARGE_THRESHOLD:
+        if agent.status == AgentStatus.IDLE and agent.energy < self.charge_threshold:
             self._go_charge(agent, world)
 
-    def get_bid(self, task, agent, rng):
+    def get_bid(self, task, agent, rng) -> Optional[float]:
+        from layer0.core.task import TaskType
         if agent.energy < 15:
             return None
-        dist = abs(task.x - agent.x) + abs(task.y - agent.y)
-        # 学習済み sector 平均と比較して相対的な価値を評価
-        key = (task.x // 5, task.y // 5)
-        sector_avg = self._sector_avg.get(key, task.reward)
-        value_ratio = min(1.4, task.reward / max(1.0, sector_avg))
-        enthusiasm = rng.uniform(0.55, 0.95) * value_ratio
+
+        dist  = abs(task.x - agent.x) + abs(task.y - agent.y)
+        key   = (task.x // 5, task.y // 5)
+        s_avg = self._sector_avg.get(key, task.reward)
+
+        # ── HUSTLER: 高熱意・距離無視 ──────────────────────────
+        if self.trait == WorkerTrait.HUSTLER:
+            enthusiasm = rng.uniform(0.75, 1.05)
+            bid = task.reward * enthusiasm - dist * 0.05
+            return round(max(task.energy_cost + 0.1, bid), 1)
+
+        # ── SAVER: エネルギー温存・近場のみ ───────────────────
+        if self.trait == WorkerTrait.SAVER:
+            if dist > 8:
+                return None          # 遠いタスクはスキップ
+            if agent.energy < self.charge_threshold + 10:
+                return None          # 余裕ない時は入札しない
+            enthusiasm = rng.uniform(0.50, 0.80)
+            bid = task.reward * enthusiasm - dist * 0.30
+            return round(max(task.energy_cost + 0.1, bid), 1)
+
+        # ── SPECIALIST: HEAVY に集中、他は消極的 ──────────────
+        if self.trait == WorkerTrait.SPECIALIST:
+            if task.task_type == TaskType.HEAVY:
+                enthusiasm = rng.uniform(0.90, 1.20)  # HEAVY に超積極的
+            elif task.task_type == TaskType.URGENT:
+                enthusiasm = rng.uniform(0.55, 0.75)
+            else:
+                enthusiasm = rng.uniform(0.30, 0.50)  # それ以外は消極的
+            bid = task.reward * enthusiasm - dist * 0.10
+            return round(max(task.energy_cost + 0.1, bid), 1)
+
+        # ── EXPLORER: 距離ペナルティほぼゼロ、広域カバー ──────
+        if self.trait == WorkerTrait.EXPLORER:
+            value_ratio = min(1.5, task.reward / max(1.0, s_avg))
+            enthusiasm  = rng.uniform(0.60, 1.00) * value_ratio
+            bid = task.reward * enthusiasm - dist * 0.02   # 距離ほぼ無視
+            return round(max(task.energy_cost + 0.1, bid), 1)
+
+        # ── OPPORTUNIST: 競合が少なそうなタスクだけ高く入札 ───
+        if self.trait == WorkerTrait.OPPORTUNIST:
+            # 競合が多い人気エリア (sector) は避ける
+            sector_density = sum(
+                1 for t in [] if (t.x // 5, t.y // 5) == key
+            )  # 簡易評価: sector の報酬が平均より高ければ混んでいると推測
+            if s_avg > 16.0:
+                return None          # 人気セクターは避ける
+            enthusiasm = rng.uniform(0.65, 1.00)
+            bid = task.reward * enthusiasm - dist * 0.12
+            return round(max(task.energy_cost + 0.1, bid), 1)
+
+        # fallback
+        enthusiasm = rng.uniform(0.55, 0.95)
         bid = task.reward * enthusiasm - dist * 0.15
         return round(max(task.energy_cost + 0.1, bid), 1)
 
@@ -103,7 +188,16 @@ class GuardianAI(RoleAI):
         return agent.target_x == charger[0] and agent.target_y == charger[1]
 
     def get_bid(self, task, agent, rng):
-        return None  # Guardian は通常タスクに入札しない
+        from layer0.core.task import TaskType
+        # SECURITY タスクのみ入札（Guardian の本領）
+        if task.task_type == TaskType.SECURITY:
+            bid = task.reward * rng.uniform(0.80, 1.10)
+            return round(max(task.energy_cost + 0.1, bid), 1)
+        # URGENT も緊急出動として入札（ボーナスは小さい）
+        if task.task_type == TaskType.URGENT:
+            bid = task.reward * rng.uniform(0.50, 0.75)
+            return round(max(task.energy_cost + 0.1, bid), 1)
+        return None
 
 
 # ── Trader ──────────────────────────────────────────────────────
@@ -170,7 +264,14 @@ class ObserverAI(RoleAI):
                     break
 
     def get_bid(self, task, agent, rng):
-        return None  # Observer は入札しない
+        from layer0.core.task import TaskType
+        if task.task_type == TaskType.SURVEY:
+            bid = task.reward * rng.uniform(0.85, 1.15)
+            return round(max(task.energy_cost + 0.1, bid), 1)
+        if task.task_type == TaskType.URGENT:
+            bid = task.reward * rng.uniform(0.40, 0.65)
+            return round(max(task.energy_cost + 0.1, bid), 1)
+        return None
 
 
 # ── Governor ────────────────────────────────────────────────────
@@ -231,10 +332,28 @@ class GovernorAI(RoleAI):
 
 
 # ── ファクトリ ──────────────────────────────────────────────────
+def _pick_trait(index: int) -> WorkerTrait:
+    """index を seed にして特性を重み付き選択（再現性あり）。"""
+    rng = random.Random(index * 1337)
+    types, weights = zip(*TRAIT_WEIGHTS)
+    r = rng.random()
+    acc = 0.0
+    for t, w in zip(types, weights):
+        acc += w
+        if r <= acc:
+            return t
+    return WorkerTrait.HUSTLER
+
+
 def make_ai(role: AgentRole, index: int = 0) -> RoleAI:
-    if role == AgentRole.WORKER:   return WorkerAI()
+    if role == AgentRole.WORKER:   return WorkerAI(trait=_pick_trait(index))
     if role == AgentRole.GUARDIAN: return GuardianAI(route_index=index)
     if role == AgentRole.TRADER:   return TraderAI()
     if role == AgentRole.OBSERVER: return ObserverAI(quadrant=index)
     if role == AgentRole.GOVERNOR: return GovernorAI(start_post=index)
     return RoleAI()
+
+
+def get_worker_trait(ai: RoleAI) -> Optional[WorkerTrait]:
+    """WorkerAI なら特性を返す。"""
+    return ai.trait if isinstance(ai, WorkerAI) else None

@@ -185,6 +185,37 @@ def main():
     print(f"\n  Worker 受注状況: {w_with_job}/{len(workers)} 体が受注 "
           f"({w_with_job/len(workers)*100:.0f}%)")
 
+    # Worker 特性別サマリー
+    from layer0.core.ai import get_worker_trait, TRAIT_LABELS
+    trait_bids  = defaultdict(list)
+    trait_wins  = defaultdict(int)
+    trait_earn  = defaultdict(float)
+    for a in workers:
+        ai_obj = sim._ai.get(a.agent_id)
+        trait  = get_worker_trait(ai_obj) if ai_obj else None
+        label  = TRAIT_LABELS.get(trait, "?") if trait else "?"
+        bids_a = [e for e in bid_events if e.agent_id == a.agent_id]
+        trait_bids[label].extend(bids_a)
+        trait_wins[label] += wins_by_agent.get(a.agent_id, 0)
+        trait_earn[label] += earn_by_agent.get(a.agent_id, 0.0)
+
+    print(f"\n  Worker 特性別  体数  入札  勝利  勝率   avg獲得EC")
+    print(f"  {'-'*52}")
+    trait_counts = defaultdict(int)
+    for a in workers:
+        ai_obj = sim._ai.get(a.agent_id)
+        trait  = get_worker_trait(ai_obj) if ai_obj else None
+        label  = TRAIT_LABELS.get(trait, "?") if trait else "?"
+        trait_counts[label] += 1
+    for label in sorted(trait_counts):
+        n     = trait_counts[label]
+        bids_ = trait_bids[label]
+        wins_ = trait_wins[label]
+        earn_ = trait_earn[label]
+        rate  = wins_ / len(bids_) * 100 if bids_ else 0
+        avg_e = earn_ / n
+        print(f"  {label:10s}  {n:4d}  {len(bids_):4d}  {wins_:4d}  {rate:5.1f}%  {avg_e:8.1f} EC")
+
     # パフォーマンス診断
     max_ms = max(tick_times) * 1000
     print(f"\n=== パフォーマンス ===")

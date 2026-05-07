@@ -25,7 +25,7 @@ class TestGovernorVoting:
     def test_vote_submitted_event_emitted(self):
         """Governor が政策提案すると VOTE_SUBMITTED イベントが発火する。"""
         sim = _make_sim_with_governors(n_governors=3)
-        sim.run(ticks=30)
+        sim.run(ticks=100)  # PROPOSAL_INTERVAL=25 なので 4 回チャンスがある
         votes = [e for e in sim.event_log if e.event_type == EventType.VOTE_SUBMITTED]
         assert len(votes) > 0, "VOTE_SUBMITTED が一度も発火しなかった"
 

@@ -231,7 +231,10 @@ class Simulator:
         for task in open_tasks:
             task.bids.clear()
             for agent in self.agents:
-                if agent.status == AgentStatus.IDLE and agent.energy > task.energy_cost:
+                # IDLE エージェントに加え、巡回中（MOVING かつ未アサイン）も入札可
+                can_bid = (agent.status == AgentStatus.IDLE or
+                           (agent.status == AgentStatus.MOVING and agent.assigned_task_id is None))
+                if can_bid and agent.energy > task.energy_cost:
                     # タスクタイプ別役職ボーナス確認（0.0 = 入札不可）
                     role_bonus = task.role_bid_bonus(agent.role)
                     if role_bonus == 0.0:

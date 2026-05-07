@@ -52,24 +52,35 @@ def test_sequence_ids_monotone(sim):
     assert seq_ids == sorted(seq_ids)
 
 
-def test_guardian_bids_zero(sim):
-    sim.run(50)
+def test_guardian_bids_on_security_only(sim):
+    sim.run(100)
     from layer0.schemas.event import EventType
+    from layer0.core.task import TaskType
     guardian_bids = [
         e for e in sim.event_log
         if e.event_type == EventType.BID_SUBMITTED and e.agent_id == "G1"
     ]
-    assert len(guardian_bids) == 0
+    task_map = {t.task_id: t for t in sim.tasks}
+    for e in guardian_bids:
+        tid = e.payload.get("task_id")
+        if tid and tid in task_map:
+            assert task_map[tid].task_type in (TaskType.SECURITY, TaskType.URGENT)
 
 
-def test_observer_bids_zero(sim):
-    sim.run(50)
+def test_observer_bids_on_survey_only(sim):
+    sim.run(100)
     from layer0.schemas.event import EventType
+    from layer0.core.task import TaskType
     obs_bids = [
         e for e in sim.event_log
         if e.event_type == EventType.BID_SUBMITTED and e.agent_id == "O1"
     ]
-    assert len(obs_bids) == 0
+    # Observer may bid on SURVEY/URGENT tasks; bids on other types must not exist
+    task_map = {t.task_id: t for t in sim.tasks}
+    for e in obs_bids:
+        tid = e.payload.get("task_id")
+        if tid and tid in task_map:
+            assert task_map[tid].task_type in (TaskType.SURVEY, TaskType.URGENT)
 
 
 def test_worker_earns_balance(sim):
