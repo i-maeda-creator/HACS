@@ -9,11 +9,17 @@ class Economy:
     tx_count: int = 0
     tax_pool: float = 0.0   # 税収累計 — セーフティネット・統治報酬の財源
 
-    TAX_RATE            = 0.05
-    UPKEEP_COST         = 0.20   # 毎tick エージェントが支払う維持費
-    SAFETY_NET_THRESHOLD = 15.0  # この残高を下回ったら補助発動
-    SAFETY_NET_AMOUNT   = 5.0    # 1回の補助額
-    GOVERNANCE_REWARD   = 8.0    # VOTE_PASSED 1件あたり Governor への報酬
+    TAX_RATE             = 0.05
+    GOVERNOR_TAX_SHARE   = 0.30  # 税収の 30% を Governor へ分配
+    UPKEEP_COST          = 0.20
+    SAFETY_NET_THRESHOLD = 15.0
+    SAFETY_NET_AMOUNT    = 5.0
+    GOVERNANCE_REWARD    = 8.0   # VOTE_PASSED 1件あたり追加報酬
+    PATROL_SALARY        = {     # 巡回・観測ロールへの毎 tick 給与
+        "Guardian": 0.25,
+        "Observer": 0.15,
+    }
+    BUILDING_INCOME_RATE = 0.50  # 建物1棟あたり毎 tick の不労所得
 
     def transfer(self, from_id: str, to_id: str, amount: float, reason: str, tick: int, task_id: str | None = None) -> LedgerEntry:
         entry = LedgerEntry(
@@ -28,12 +34,18 @@ class Economy:
         self.tx_count += 1
         return entry
 
-    def pay_reward(self, agent_id: str, reward: float, task_id: str, tick: int) -> None:
+    def pay_reward(self, agent_id: str, reward: float, task_id: str, tick: int,
+                   governor_ids: list[str] | None = None) -> float:
+        """タスク報酬を支払い、税の 30% を Governor に分配。残りを tax_pool へ。戻り値 = 税額。"""
         tax = round(reward * self.TAX_RATE, 2)
         net = reward - tax
-        self.tax_pool += tax
         self.transfer("city", agent_id, net, "task_reward", tick, task_id)
         self.transfer(agent_id, "city", tax, "tax", tick, task_id)
+        # Governor 税配分
+        gov_cut = round(tax * self.GOVERNOR_TAX_SHARE, 2)
+        pool_cut = tax - gov_cut
+        self.tax_pool += pool_cut
+        return gov_cut  # Simulator 側で Governor へ配分
 
     def pay_upkeep(self, agent_id: str, tick: int) -> None:
         """維持費を市税プールへ。"""

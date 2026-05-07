@@ -325,6 +325,48 @@ class MedicAI(RoleAI):
         return None  # Medic はタスク入札しない
 
 
+# ── Architect ───────────────────────────────────────────────────
+class ArchitectAI(RoleAI):
+    """CONSTRUCT タスクを専門に受注し、建物で不労所得を得る建設家。"""
+
+    CHARGE_THRESHOLD = 30.0
+
+    def decide(self, agent, world, tasks, agents, tick, rng):
+        if agent.energy < self.CHARGE_THRESHOLD:
+            if agent.status == AgentStatus.IDLE:
+                self._go_charge(agent, world)
+            return
+        if agent.status == AgentStatus.IDLE:
+            from layer0.core.task import TaskType
+            # CONSTRUCT タスクがあれば向かう
+            targets = [t for t in tasks
+                       if hasattr(t, 'task_type') and t.task_type == TaskType.CONSTRUCT
+                       and hasattr(t, 'status') and t.status.value == 'open']
+            if targets:
+                nearest = min(targets, key=lambda t: abs(t.x - agent.x) + abs(t.y - agent.y))
+                agent.target_x, agent.target_y = nearest.x, nearest.y
+                agent.status = AgentStatus.MOVING
+            else:
+                # タスクなし → マップ中心付近をウロウロ
+                for _ in range(10):
+                    tx = rng.randint(4, 15)
+                    ty = rng.randint(4, 15)
+                    if world.is_passable(tx, ty) and (tx != agent.x or ty != agent.y):
+                        agent.target_x, agent.target_y = tx, ty
+                        agent.status = AgentStatus.MOVING
+                        break
+
+    def get_bid(self, task, agent, rng) -> Optional[float]:
+        from layer0.core.task import TaskType
+        if task.task_type == TaskType.CONSTRUCT:
+            bid = task.reward * rng.uniform(0.90, 1.15)
+            return round(max(task.energy_cost + 0.1, bid), 1)
+        if task.task_type == TaskType.HEAVY:
+            bid = task.reward * rng.uniform(0.50, 0.70)
+            return round(max(task.energy_cost + 0.1, bid), 1)
+        return None
+
+
 # ── Governor ────────────────────────────────────────────────────
 class GovernorAI(RoleAI):
     """KPIを監視して都市を巡回しながらポリシー提案を行う統治者。"""
@@ -360,13 +402,18 @@ class GovernorAI(RoleAI):
 
     def policy_proposal(self, tick: int, gini: float,
                          completion_rate: float,
-                         worker_idle_ratio: float = 0.0) -> Optional[dict]:
+                         worker_idle_ratio: float = 0.0,
+                         tax_pool: float = 0.0) -> Optional[dict]:
         if tick % self.PROPOSAL_INTERVAL != 0:
             return None
 
         def _can_propose(action: str) -> bool:
             return tick - self._last_proposal.get(action, -999) >= self._cooldown
 
+        if tax_pool > 400 and _can_propose("basic_income"):
+            self._last_proposal["basic_income"] = tick
+            return {"action": "basic_income", "value": tax_pool,
+                    "reason": f"税プール={tax_pool:.0f} EC - 蓄積分を全市民へ再分配"}
         if worker_idle_ratio > 0.5 and _can_propose("worker_support"):
             self._last_proposal["worker_support"] = tick
             return {"action": "worker_support", "value": round(worker_idle_ratio, 2),
@@ -402,7 +449,8 @@ def make_ai(role: AgentRole, index: int = 0) -> RoleAI:
     if role == AgentRole.TRADER:   return TraderAI()
     if role == AgentRole.OBSERVER: return ObserverAI(quadrant=index)
     if role == AgentRole.GOVERNOR: return GovernorAI(start_post=index)
-    if role == AgentRole.MEDIC:    return MedicAI()
+    if role == AgentRole.MEDIC:      return MedicAI()
+    if role == AgentRole.ARCHITECT:  return ArchitectAI()
     return RoleAI()
 
 

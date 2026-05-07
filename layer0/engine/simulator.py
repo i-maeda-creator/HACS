@@ -9,7 +9,7 @@ from layer0.core.task import Task, TaskStatus, TaskType, make_task, TASK_PARAMS,
 from layer0.core.economy import Economy
 from layer0.core.policy import PolicyEngine
 from layer0.core.safety import SafetyGate
-from layer0.core.ai import RoleAI, make_ai, GovernorAI, MedicAI
+from layer0.core.ai import RoleAI, make_ai, GovernorAI, MedicAI, ArchitectAI
 from layer0.schemas.event import Event, EventType
 from layer0.schemas.state import StateSnapshot, AgentSnapshot, TaskSnapshot, EconomySnapshot
 
@@ -39,9 +39,11 @@ class Simulator:
         # 投票バッファ: action -> List[governor_id]（同一 tick 内の票を集計）
         self._vote_buffer: Dict[str, List[str]] = {}
         # 市場イベント管理
-        self._market_event: Optional[Dict] = None   # 発動中のイベント
+        self._market_event: Optional[Dict] = None
         self._market_event_end: int = 0
         self._next_market_event: int = self.rng.randint(30, 60)
+        # 建物: (x,y) → owner_agent_id
+        self._buildings: Dict[tuple, str] = {}
 
     def add_agent(self, agent: Agent) -> None:
         idx = self._role_counts.get(agent.role, 0)
@@ -137,6 +139,10 @@ class Simulator:
         self._charge_agents()
         # Medic 治療サービス
         self._heal_agents()
+        # パトロール給与（Guardian/Observer）
+        self._pay_patrol_salary()
+        # 建物収入（Architect）
+        self._collect_building_income()
         snap = self._snapshot()
         self.snapshots.append(snap)
         return snap
@@ -170,7 +176,8 @@ class Simulator:
             ai = self._ai.get(agent.agent_id)
             if not isinstance(ai, GovernorAI):
                 continue
-            proposal = ai.policy_proposal(self.tick, gini, completion, worker_idle_ratio)
+            proposal = ai.policy_proposal(self.tick, gini, completion, worker_idle_ratio,
+                                          tax_pool=self.economy.tax_pool)
             if proposal:
                 action = proposal["action"]
                 self._vote_buffer.setdefault(action, []).append(agent.agent_id)
@@ -208,6 +215,19 @@ class Simulator:
             pp["tax_rate"] = min(0.25, pp["tax_rate"] + 0.02 * factor)
         elif action == "reward_boost":
             pp["reward_multiplier"] = min(1.6, pp["reward_multiplier"] + 0.12 * factor)
+        elif action == "basic_income":
+            # 税プールから全エージェントへ均等分配
+            if self.economy.tax_pool > 0:
+                share = round(min(8.0, self.economy.tax_pool / max(len(self.agents), 1)) * factor, 1)
+                total = 0.0
+                for a in self.agents:
+                    if self.economy.tax_pool >= share:
+                        self.economy.tax_pool -= share
+                        a.balance += share
+                        total += share
+                self._emit(EventType.BASIC_INCOME_PAID,
+                           data={"share": share, "total": round(total, 1),
+                                 "recipients": len(self.agents)})
 
     def _tick_market_events(self) -> None:
         """市場イベント（Boom / Crash）の発火・終了管理。"""
@@ -238,12 +258,14 @@ class Simulator:
                                       "reward_multiplier": self.policy_params["reward_multiplier"]})
 
     def _deduct_upkeep(self) -> None:
+        cost = Economy.UPKEEP_COST
         for agent in self.agents:
-            cost = Economy.UPKEEP_COST
             agent.balance = max(0.0, agent.balance - cost)
             self.economy.pay_upkeep(agent.agent_id, self.tick)
-            self._emit(EventType.UPKEEP_PAID, agent_id=agent.agent_id,
-                       data={"amount": cost, "balance": round(agent.balance, 2)})
+        # 集約イベント1件（個別発火をやめてパフォーマンス改善）
+        self._emit(EventType.UPKEEP_PAID,
+                   data={"count": len(self.agents), "amount_each": cost,
+                         "total": round(cost * len(self.agents), 1)})
 
     def _apply_safety_net(self) -> None:
         for agent in self.agents:
@@ -254,6 +276,31 @@ class Simulator:
                                data={"amount": Economy.SAFETY_NET_AMOUNT,
                                      "balance": round(agent.balance, 1),
                                      "tax_pool": round(self.economy.tax_pool, 1)})
+
+    def _pay_patrol_salary(self) -> None:
+        """Guardian/Observer は巡回・観測の対価として税プールから給与を受け取る。"""
+        for agent in self.agents:
+            salary = Economy.PATROL_SALARY.get(agent.role.value, 0.0)
+            if salary > 0 and self.economy.tax_pool >= salary:
+                self.economy.tax_pool -= salary
+                agent.balance += salary
+                self._emit(EventType.PATROL_SALARY, agent_id=agent.agent_id,
+                           data={"salary": salary, "balance": round(agent.balance, 1)})
+
+    def _collect_building_income(self) -> None:
+        """建物オーナー（Architect）は毎 tick 税プールから不労所得を得る。
+        通過エージェントはエネルギー効率ボーナスを受ける（_move_agents 内で適用）。"""
+        rate = Economy.BUILDING_INCOME_RATE
+        for (bx, by), owner_id in list(self._buildings.items()):
+            if self.economy.tax_pool < rate:
+                break
+            owner = self._get_agent(owner_id)
+            if owner:
+                self.economy.tax_pool -= rate
+                owner.balance += rate
+                self._emit(EventType.BUILDING_INCOME, agent_id=owner_id,
+                           data={"x": bx, "y": by, "income": rate,
+                                 "balance": round(owner.balance, 1)})
 
     def _heal_agents(self) -> None:
         for medic in self.agents:
@@ -347,12 +394,16 @@ class Simulator:
             if self.world.is_passable(nx, ny):
                 agent.x, agent.y = nx, ny
                 agent.spend_energy(Agent.MOVE_COST)
+                # 建物セルを通過 → 移動コストの一部を回収（インフラ効率化）
+                if (nx, ny) in self._buildings:
+                    agent.energy = min(Agent.MAX_ENERGY, agent.energy + 0.3)
                 self._emit(EventType.AGENT_MOVED, agent_id=agent.agent_id,
                            data={"x": nx, "y": ny, "energy": round(agent.energy, 1)})
             if agent.x == agent.target_x and agent.y == agent.target_y:
                 agent.status = AgentStatus.WORKING
 
     def _work_agents(self) -> None:
+        governors = [a for a in self.agents if a.role == AgentRole.GOVERNOR]
         for agent in self.agents:
             if agent.status != AgentStatus.WORKING:
                 continue
@@ -365,7 +416,21 @@ class Simulator:
             agent.balance += net
             task.status = TaskStatus.COMPLETED
             task.completed_tick = self.tick
-            self.economy.pay_reward(agent.agent_id, task.reward, task.task_id, self.tick)
+            # 税収の30%をGovernorへ等分配分
+            gov_cut = self.economy.pay_reward(agent.agent_id, task.reward, task.task_id, self.tick)
+            if governors and gov_cut > 0:
+                share = round(gov_cut / len(governors), 2)
+                for gov in governors:
+                    gov.balance += share
+                    self._emit(EventType.GOVERNANCE_REWARD, agent_id=gov.agent_id,
+                               data={"reason": "tax_dividend", "reward": share,
+                                     "task_id": task.task_id})
+            # CONSTRUCT完了 → 建物を登録
+            if task.task_type == TaskType.CONSTRUCT:
+                self._buildings[(task.x, task.y)] = agent.agent_id
+                self._emit(EventType.BUILDING_INCOME, agent_id=agent.agent_id,
+                           data={"event": "built", "x": task.x, "y": task.y,
+                                 "buildings_total": len(self._buildings)})
             self._emit(EventType.TASK_COMPLETED, agent_id=agent.agent_id, task_id=task.task_id,
                        data={"reward": net, "energy": round(agent.energy, 1), "balance": round(agent.balance, 1)})
             agent.assigned_task_id = None

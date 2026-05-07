@@ -20,6 +20,7 @@ class TaskType(str, Enum):
     SECURITY    = "security"    # 治安対応   — Guardian も入札可
     SURVEY      = "survey"      # 調査収集   — Observer も入札可
     MICRO       = "micro"       # 近場の小作業 — SAVER 優先（エージェント付近にスポーン）
+    CONSTRUCT   = "construct"   # 建設作業     — Architect 専門（建物を生成）
 
 
 # ── タイプ別パラメータ定義 ────────────────────────────────────────────────────
@@ -63,83 +64,45 @@ TASK_PARAMS: Dict[str, dict] = {
     TaskType.MICRO: dict(
         reward_range=(2.0,   6.0),
         cost_range  =(0.5,   1.5),
-        expires_in  =20,            # 20 tick 以内に受注されなければ失効
+        expires_in  =20,
         color       ="#CCFF90",
+    ),
+    TaskType.CONSTRUCT: dict(
+        reward_range=(25.0, 45.0),
+        cost_range  =(10.0, 18.0),
+        expires_in  =None,
+        color       ="#FF6F00",
     ),
 }
 
 # タイプ別スポーン確率（合計 1.0）
 TASK_TYPE_WEIGHTS = [
-    (TaskType.STANDARD, 0.28),
-    (TaskType.HEAVY,    0.10),
-    (TaskType.URGENT,   0.13),
-    (TaskType.TRADE,    0.16),
+    (TaskType.STANDARD, 0.25),
+    (TaskType.HEAVY,    0.09),
+    (TaskType.URGENT,   0.12),
+    (TaskType.TRADE,    0.14),
     (TaskType.SECURITY, 0.10),
     (TaskType.SURVEY,   0.10),
-    (TaskType.MICRO,    0.13),
+    (TaskType.MICRO,    0.12),
+    (TaskType.CONSTRUCT,0.08),
 ]
 
 # 役職ごとの入札ボーナス係数（タスクタイプ別）
 # 1.0 = 通常 / >1.0 = ボーナス / 0.0 = 入札不可
 from layer0.core.agent import AgentRole
 
+_Z = 0.0  # 入札不可
+
 ROLE_TASK_BONUS: Dict[TaskType, Dict[AgentRole, float]] = {
-    TaskType.STANDARD: {
-        AgentRole.WORKER:   1.0,
-        AgentRole.TRADER:   1.0,
-        AgentRole.GUARDIAN: 0.0,
-        AgentRole.OBSERVER: 0.0,
-        AgentRole.GOVERNOR: 0.0,
-        AgentRole.MEDIC:    0.0,
-    },
-    TaskType.HEAVY: {
-        AgentRole.WORKER:   1.4,
-        AgentRole.TRADER:   0.7,
-        AgentRole.GUARDIAN: 0.0,
-        AgentRole.OBSERVER: 0.0,
-        AgentRole.GOVERNOR: 0.0,
-        AgentRole.MEDIC:    0.0,
-    },
-    TaskType.URGENT: {
-        AgentRole.WORKER:   1.2,
-        AgentRole.TRADER:   1.1,
-        AgentRole.GUARDIAN: 0.8,
-        AgentRole.OBSERVER: 0.6,
-        AgentRole.GOVERNOR: 0.0,
-        AgentRole.MEDIC:    0.0,
-    },
-    TaskType.TRADE: {
-        AgentRole.WORKER:   0.8,
-        AgentRole.TRADER:   1.6,
-        AgentRole.GUARDIAN: 0.0,
-        AgentRole.OBSERVER: 0.0,
-        AgentRole.GOVERNOR: 0.0,
-        AgentRole.MEDIC:    0.0,
-    },
-    TaskType.SECURITY: {
-        AgentRole.WORKER:   0.7,
-        AgentRole.TRADER:   0.5,
-        AgentRole.GUARDIAN: 1.5,
-        AgentRole.OBSERVER: 0.6,
-        AgentRole.GOVERNOR: 0.0,
-        AgentRole.MEDIC:    0.0,
-    },
-    TaskType.SURVEY: {
-        AgentRole.WORKER:   0.6,
-        AgentRole.TRADER:   0.4,
-        AgentRole.GUARDIAN: 0.0,
-        AgentRole.OBSERVER: 1.5,  # Observer が主役
-        AgentRole.GOVERNOR: 0.0,
-        AgentRole.MEDIC:    0.0,
-    },
-    TaskType.MICRO: {
-        AgentRole.WORKER:   1.0,  # 誰でも入れるが報酬は小さい
-        AgentRole.TRADER:   0.5,  # Trader はほぼスルー
-        AgentRole.GUARDIAN: 0.0,
-        AgentRole.OBSERVER: 0.0,
-        AgentRole.GOVERNOR: 0.0,
-        AgentRole.MEDIC:    0.0,
-    },
+    #                          WRK   TRD   GRD   OBS   GOV   MED   ARC
+    TaskType.STANDARD:  {AgentRole.WORKER:1.0, AgentRole.TRADER:1.0,   AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:_Z,  AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:0.6},
+    TaskType.HEAVY:     {AgentRole.WORKER:1.4, AgentRole.TRADER:0.7,   AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:_Z,  AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:0.8},
+    TaskType.URGENT:    {AgentRole.WORKER:1.2, AgentRole.TRADER:1.1,   AgentRole.GUARDIAN:0.8, AgentRole.OBSERVER:0.6, AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:_Z},
+    TaskType.TRADE:     {AgentRole.WORKER:0.8, AgentRole.TRADER:1.6,   AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:_Z,  AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:_Z},
+    TaskType.SECURITY:  {AgentRole.WORKER:0.7, AgentRole.TRADER:0.5,   AgentRole.GUARDIAN:1.5, AgentRole.OBSERVER:0.6, AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:_Z},
+    TaskType.SURVEY:    {AgentRole.WORKER:0.6, AgentRole.TRADER:0.4,   AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:1.5, AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:_Z},
+    TaskType.MICRO:     {AgentRole.WORKER:1.0, AgentRole.TRADER:0.5,   AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:_Z,  AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:_Z},
+    TaskType.CONSTRUCT: {AgentRole.WORKER:0.6, AgentRole.TRADER:_Z,    AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:_Z,  AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:2.2},
 }
 
 

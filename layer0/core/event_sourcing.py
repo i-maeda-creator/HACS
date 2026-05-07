@@ -171,9 +171,10 @@ class EventReplayer:
                 self._agents[e.agent_id].status = AgentStatus.IDLE.value
 
         elif et == EventType.UPKEEP_PAID:
-            if e.agent_id in self._agents:
-                self._agents[e.agent_id].balance = max(
-                    0.0, self._agents[e.agent_id].balance - 0.20)
+            # 集約イベント: 全エージェントから一律控除
+            amount = p.get("amount_each", 0.20)
+            for a in self._agents.values():
+                a.balance = max(0.0, a.balance - amount)
 
         elif et == EventType.SAFETY_NET_PAID:
             if e.agent_id in self._agents:
@@ -182,6 +183,21 @@ class EventReplayer:
         elif et == EventType.GOVERNANCE_REWARD:
             if e.agent_id in self._agents:
                 self._agents[e.agent_id].balance += p.get("reward", 0.0)
+
+        elif et == EventType.PATROL_SALARY:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance += p.get("salary", 0.0)
+
+        elif et == EventType.BUILDING_INCOME:
+            if p.get("event") == "built":
+                pass  # 建物登録イベント、残高変化なし
+            elif e.agent_id in self._agents:
+                self._agents[e.agent_id].balance += p.get("income", 0.0)
+
+        elif et == EventType.BASIC_INCOME_PAID:
+            share = p.get("share", 0.0)
+            for a in self._agents.values():
+                a.balance += share
 
         elif et == EventType.HEALING_DONE:
             medic_id  = e.agent_id

@@ -27,6 +27,9 @@ class EventType(str, Enum):
     HEALING_DONE          = "HealingDone"     # Medic 治療完了
     SAFETY_NET_PAID       = "SafetyNetPaid"   # セーフティネット補助
     GOVERNANCE_REWARD     = "GovernanceReward"# Governor 統治報酬
+    PATROL_SALARY         = "PatrolSalary"    # Guardian/Observer 巡回給与
+    BUILDING_INCOME       = "BuildingIncome"  # Architect 建物不労所得
+    BASIC_INCOME_PAID     = "BasicIncomePaid" # 全員への基本所得分配
 
 
 # EventType → MQTT トピックのマッピング
