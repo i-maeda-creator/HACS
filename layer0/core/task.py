@@ -19,6 +19,7 @@ class TaskType(str, Enum):
     TRADE       = "trade"       # 市場取引   — Trader 優先
     SECURITY    = "security"    # 治安対応   — Guardian も入札可
     SURVEY      = "survey"      # 調査収集   — Observer も入札可
+    MICRO       = "micro"       # 近場の小作業 — SAVER 優先（エージェント付近にスポーン）
 
 
 # ── タイプ別パラメータ定義 ────────────────────────────────────────────────────
@@ -59,16 +60,23 @@ TASK_PARAMS: Dict[str, dict] = {
         expires_in  =None,
         color       ="#00B0FF",
     ),
+    TaskType.MICRO: dict(
+        reward_range=(2.0,   6.0),
+        cost_range  =(0.5,   1.5),
+        expires_in  =20,            # 20 tick 以内に受注されなければ失効
+        color       ="#CCFF90",
+    ),
 }
 
 # タイプ別スポーン確率（合計 1.0）
 TASK_TYPE_WEIGHTS = [
-    (TaskType.STANDARD, 0.35),
-    (TaskType.HEAVY,    0.12),
-    (TaskType.URGENT,   0.15),
-    (TaskType.TRADE,    0.18),
+    (TaskType.STANDARD, 0.28),
+    (TaskType.HEAVY,    0.10),
+    (TaskType.URGENT,   0.13),
+    (TaskType.TRADE,    0.16),
     (TaskType.SECURITY, 0.10),
     (TaskType.SURVEY,   0.10),
+    (TaskType.MICRO,    0.13),
 ]
 
 # 役職ごとの入札ボーナス係数（タスクタイプ別）
@@ -79,37 +87,42 @@ ROLE_TASK_BONUS: Dict[TaskType, Dict[AgentRole, float]] = {
     TaskType.STANDARD: {
         AgentRole.WORKER:   1.0,
         AgentRole.TRADER:   1.0,
-        AgentRole.GUARDIAN: 0.0,  # 入札不可
-        AgentRole.OBSERVER: 0.0,
-        AgentRole.GOVERNOR: 0.0,
-    },
-    TaskType.HEAVY: {
-        AgentRole.WORKER:   1.4,  # Worker 大得意
-        AgentRole.TRADER:   0.7,  # Trader は嫌い（コスト重い）
         AgentRole.GUARDIAN: 0.0,
         AgentRole.OBSERVER: 0.0,
         AgentRole.GOVERNOR: 0.0,
+        AgentRole.MEDIC:    0.0,
+    },
+    TaskType.HEAVY: {
+        AgentRole.WORKER:   1.4,
+        AgentRole.TRADER:   0.7,
+        AgentRole.GUARDIAN: 0.0,
+        AgentRole.OBSERVER: 0.0,
+        AgentRole.GOVERNOR: 0.0,
+        AgentRole.MEDIC:    0.0,
     },
     TaskType.URGENT: {
-        AgentRole.WORKER:   1.2,  # 全員入札可・Workerが一番積極的
+        AgentRole.WORKER:   1.2,
         AgentRole.TRADER:   1.1,
         AgentRole.GUARDIAN: 0.8,
         AgentRole.OBSERVER: 0.6,
         AgentRole.GOVERNOR: 0.0,
+        AgentRole.MEDIC:    0.0,
     },
     TaskType.TRADE: {
         AgentRole.WORKER:   0.8,
-        AgentRole.TRADER:   1.6,  # Trader の独壇場
+        AgentRole.TRADER:   1.6,
         AgentRole.GUARDIAN: 0.0,
         AgentRole.OBSERVER: 0.0,
         AgentRole.GOVERNOR: 0.0,
+        AgentRole.MEDIC:    0.0,
     },
     TaskType.SECURITY: {
         AgentRole.WORKER:   0.7,
         AgentRole.TRADER:   0.5,
-        AgentRole.GUARDIAN: 1.5,  # Guardian が主役
+        AgentRole.GUARDIAN: 1.5,
         AgentRole.OBSERVER: 0.6,
         AgentRole.GOVERNOR: 0.0,
+        AgentRole.MEDIC:    0.0,
     },
     TaskType.SURVEY: {
         AgentRole.WORKER:   0.6,
@@ -117,6 +130,15 @@ ROLE_TASK_BONUS: Dict[TaskType, Dict[AgentRole, float]] = {
         AgentRole.GUARDIAN: 0.0,
         AgentRole.OBSERVER: 1.5,  # Observer が主役
         AgentRole.GOVERNOR: 0.0,
+        AgentRole.MEDIC:    0.0,
+    },
+    TaskType.MICRO: {
+        AgentRole.WORKER:   1.0,  # 誰でも入れるが報酬は小さい
+        AgentRole.TRADER:   0.5,  # Trader はほぼスルー
+        AgentRole.GUARDIAN: 0.0,
+        AgentRole.OBSERVER: 0.0,
+        AgentRole.GOVERNOR: 0.0,
+        AgentRole.MEDIC:    0.0,
     },
 }
 

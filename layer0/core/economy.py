@@ -7,8 +7,13 @@ from layer0.schemas.ledger import LedgerEntry
 class Economy:
     ledger: list[LedgerEntry] = field(default_factory=list)
     tx_count: int = 0
+    tax_pool: float = 0.0   # 税収累計 — セーフティネット・統治報酬の財源
 
-    TAX_RATE = 0.05
+    TAX_RATE            = 0.05
+    UPKEEP_COST         = 0.20   # 毎tick エージェントが支払う維持費
+    SAFETY_NET_THRESHOLD = 15.0  # この残高を下回ったら補助発動
+    SAFETY_NET_AMOUNT   = 5.0    # 1回の補助額
+    GOVERNANCE_REWARD   = 8.0    # VOTE_PASSED 1件あたり Governor への報酬
 
     def transfer(self, from_id: str, to_id: str, amount: float, reason: str, tick: int, task_id: str | None = None) -> LedgerEntry:
         entry = LedgerEntry(
@@ -24,10 +29,33 @@ class Economy:
         return entry
 
     def pay_reward(self, agent_id: str, reward: float, task_id: str, tick: int) -> None:
-        tax = reward * self.TAX_RATE
+        tax = round(reward * self.TAX_RATE, 2)
         net = reward - tax
+        self.tax_pool += tax
         self.transfer("city", agent_id, net, "task_reward", tick, task_id)
         self.transfer(agent_id, "city", tax, "tax", tick, task_id)
+
+    def pay_upkeep(self, agent_id: str, tick: int) -> None:
+        """維持費を市税プールへ。"""
+        self.tax_pool += self.UPKEEP_COST
+        self.transfer(agent_id, "city", self.UPKEEP_COST, "upkeep", tick)
+
+    def pay_safety_net(self, agent_id: str, tick: int) -> bool:
+        """残高不足エージェントへ補助。財源不足なら失敗。"""
+        if self.tax_pool >= self.SAFETY_NET_AMOUNT:
+            self.tax_pool -= self.SAFETY_NET_AMOUNT
+            self.transfer("city", agent_id, self.SAFETY_NET_AMOUNT, "safety_net", tick)
+            return True
+        return False
+
+    def pay_governance_reward(self, agent_id: str, tick: int, factor: float = 1.0) -> bool:
+        """VOTE_PASSED 時に投票 Governor へ報酬。"""
+        amount = round(self.GOVERNANCE_REWARD * factor, 1)
+        if self.tax_pool >= amount:
+            self.tax_pool -= amount
+            self.transfer("city", agent_id, amount, "governance_reward", tick)
+            return True
+        return False
 
     def total_transactions(self) -> int:
         return self.tx_count

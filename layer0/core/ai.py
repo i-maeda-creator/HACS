@@ -74,6 +74,7 @@ class WorkerAI(RoleAI):
     def __init__(self, trait: WorkerTrait = WorkerTrait.HUSTLER):
         self.trait = trait
         self._sector_avg: dict = {}
+        self._open_sector_counts: dict = {}
         self._bid_counts: Dict[str, int] = {}  # task_id → 競合入札数の観測
 
     @property
@@ -81,11 +82,13 @@ class WorkerAI(RoleAI):
         return self._CHARGE_THRESHOLD[self.trait]
 
     def decide(self, agent, world, tasks, agents, tick, rng):
+        self._open_sector_counts: dict = {}
         for t in tasks:
             if hasattr(t, 'status') and t.status.value == 'open':
                 key = (t.x // 5, t.y // 5)
                 prior = self._sector_avg.get(key, t.reward)
                 self._sector_avg[key] = prior * 0.85 + t.reward * 0.15
+                self._open_sector_counts[key] = self._open_sector_counts.get(key, 0) + 1
         if agent.status == AgentStatus.IDLE and agent.energy < self.charge_threshold:
             self._go_charge(agent, world)
 
@@ -106,6 +109,11 @@ class WorkerAI(RoleAI):
 
         # ── SAVER: エネルギー温存・近場のみ ───────────────────
         if self.trait == WorkerTrait.SAVER:
+            if task.task_type == TaskType.MICRO:
+                # MICRO は近場専門の得意分野 — 高めに入札
+                enthusiasm = rng.uniform(0.95, 1.25)
+                bid = task.reward * enthusiasm - dist * 0.10
+                return round(max(task.energy_cost + 0.1, bid), 1)
             if dist > 8:
                 return None          # 遠いタスクはスキップ
             if agent.energy < self.charge_threshold + 10:
@@ -132,16 +140,14 @@ class WorkerAI(RoleAI):
             bid = task.reward * enthusiasm - dist * 0.02   # 距離ほぼ無視
             return round(max(task.energy_cost + 0.1, bid), 1)
 
-        # ── OPPORTUNIST: 競合が少なそうなタスクだけ高く入札 ───
+        # ── OPPORTUNIST: 競合が少ないニッチなタスクを高く入札 ──
         if self.trait == WorkerTrait.OPPORTUNIST:
-            # 競合が多い人気エリア (sector) は避ける
-            sector_density = sum(
-                1 for t in [] if (t.x // 5, t.y // 5) == key
-            )  # 簡易評価: sector の報酬が平均より高ければ混んでいると推測
-            if s_avg > 16.0:
-                return None          # 人気セクターは避ける
-            enthusiasm = rng.uniform(0.65, 1.00)
-            bid = task.reward * enthusiasm - dist * 0.12
+            sector_density = self._open_sector_counts.get(key, 0)
+            # 同セクターに 2件超 or 平均報酬が高い人気エリアは避ける
+            if sector_density > 2 or s_avg > 16.0:
+                return None
+            enthusiasm = rng.uniform(0.85, 1.15)  # 狙ったら高く入札
+            bid = task.reward * enthusiasm - dist * 0.08
             return round(max(task.energy_cost + 0.1, bid), 1)
 
         # fallback
@@ -274,6 +280,51 @@ class ObserverAI(RoleAI):
         return None
 
 
+# ── Medic ───────────────────────────────────────────────────────
+class MedicAI(RoleAI):
+    """低エネルギーのエージェントに近づき治療サービスを提供する。タスクには入札しない。"""
+
+    CHARGE_THRESHOLD  = 35.0
+    HEAL_ENERGY_BELOW = 50.0  # この値を下回るエージェントを治療対象とする
+    MIN_CLIENT_BALANCE = 4.0  # クライアントの最低残高（支払い能力確認）
+    HEAL_AMOUNT       = 20.0  # 1回の治療で回復するエネルギー量
+    HEAL_PRICE_RATE   = 0.50  # 回復量 × この係数 = 治療費 EC
+
+    def decide(self, agent, world, tasks, agents, tick, rng):
+        if agent.energy < self.CHARGE_THRESHOLD:
+            if agent.status == AgentStatus.IDLE:
+                self._go_charge(agent, world)
+            return
+
+        # 治療対象（低エネルギー & 支払い能力あり）を探す
+        targets = [
+            a for a in agents
+            if a.agent_id != agent.agent_id
+            and a.energy < self.HEAL_ENERGY_BELOW
+            and a.balance >= self.MIN_CLIENT_BALANCE
+        ]
+        if not targets:
+            # ターゲットなし → マップ中央付近をウロウロ
+            if agent.status == AgentStatus.IDLE:
+                tx = rng.randint(7, 13)
+                ty = rng.randint(7, 13)
+                if world.is_passable(tx, ty):
+                    agent.target_x, agent.target_y = tx, ty
+                    agent.status = AgentStatus.MOVING
+            return
+
+        # 最近傍ターゲットへ移動
+        nearest = min(targets, key=lambda a: abs(a.x - agent.x) + abs(a.y - agent.y))
+        if agent.x == nearest.x and agent.y == nearest.y:
+            agent.status = AgentStatus.IDLE  # 到着 → simulator が治療処理
+        else:
+            agent.target_x, agent.target_y = nearest.x, nearest.y
+            agent.status = AgentStatus.MOVING
+
+    def get_bid(self, task, agent, rng):
+        return None  # Medic はタスク入札しない
+
+
 # ── Governor ────────────────────────────────────────────────────
 class GovernorAI(RoleAI):
     """KPIを監視して都市を巡回しながらポリシー提案を行う統治者。"""
@@ -351,6 +402,7 @@ def make_ai(role: AgentRole, index: int = 0) -> RoleAI:
     if role == AgentRole.TRADER:   return TraderAI()
     if role == AgentRole.OBSERVER: return ObserverAI(quadrant=index)
     if role == AgentRole.GOVERNOR: return GovernorAI(start_post=index)
+    if role == AgentRole.MEDIC:    return MedicAI()
     return RoleAI()
 
 

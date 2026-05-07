@@ -23,6 +23,10 @@ class EventType(str, Enum):
     VOTE_SUBMITTED        = "VoteSubmitted"   # Governor が投票を提出
     VOTE_PASSED           = "VotePassed"      # 過半数合意 → 政策発動
     MARKET_EVENT          = "MarketEvent"     # 市場Boom/Crash
+    UPKEEP_PAID           = "UpkeepPaid"      # 維持費支払い
+    HEALING_DONE          = "HealingDone"     # Medic 治療完了
+    SAFETY_NET_PAID       = "SafetyNetPaid"   # セーフティネット補助
+    GOVERNANCE_REWARD     = "GovernanceReward"# Governor 統治報酬
 
 
 # EventType → MQTT トピックのマッピング

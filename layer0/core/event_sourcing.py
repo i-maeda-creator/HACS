@@ -170,6 +170,30 @@ class EventReplayer:
             if e.agent_id and e.agent_id in self._agents:
                 self._agents[e.agent_id].status = AgentStatus.IDLE.value
 
+        elif et == EventType.UPKEEP_PAID:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance = max(
+                    0.0, self._agents[e.agent_id].balance - 0.20)
+
+        elif et == EventType.SAFETY_NET_PAID:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance += p.get("amount", 5.0)
+
+        elif et == EventType.GOVERNANCE_REWARD:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance += p.get("reward", 0.0)
+
+        elif et == EventType.HEALING_DONE:
+            medic_id  = e.agent_id
+            client_id = p.get("target_id")
+            cost      = p.get("cost", 0.0)
+            heal      = p.get("heal", 0.0)
+            if medic_id in self._agents:
+                self._agents[medic_id].balance += cost
+            if client_id and client_id in self._agents:
+                self._agents[client_id].balance  = max(0.0, self._agents[client_id].balance - cost)
+                self._agents[client_id].energy   = min(100.0, self._agents[client_id].energy + heal)
+
     # ── スナップショット作成 ─────────────────────────────────────
     def _snapshot(self, tick: int) -> WorldSnapshot:
         import copy

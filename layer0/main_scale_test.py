@@ -51,13 +51,18 @@ def generate_agents():
     for i, (x, y) in enumerate(governor_spots):
         agents.append(Agent(f"V{i+1}", AgentRole.GOVERNOR, x=x, y=y))
 
-    return agents  # 36+8+7+6+3 = 60
+    # Medic x 4（各象限に1体）
+    medic_spots = [(5,5),(14,5),(5,14),(14,14)]
+    for i, (x, y) in enumerate(medic_spots):
+        agents.append(Agent(f"M{i+1}", AgentRole.MEDIC, x=x, y=y))
+
+    return agents  # 36+8+7+6+3+4 = 64
 
 
 def main():
     agents = generate_agents()
     print(f"=== HACS Scale Test ===")
-    print(f"  Agents : {len(agents)}")
+    print(f"  Agents : {len(agents)} (Worker x36 / Guardian x8 / Trader x7 / Observer x6 / Governor x3 / Medic x4)")
     print(f"  Ticks  : {TICKS}")
     print()
 
@@ -89,6 +94,7 @@ def main():
     scores = sim.policy.score(sim.agents, sim.tasks)
     print(f"\n  効率性   : {scores.get('efficiency',0):.3f}")
     print(f"  平等性   : {scores.get('equality',0):.3f}")
+    print(f"  税プール : {sim.economy.tax_pool:.1f} EC")
 
     # 役職別サマリー
     print(f"\n  役職別残高（平均）:")
@@ -226,6 +232,29 @@ def main():
         print("  判定: 許容範囲 (< 50ms)")
     else:
         print("  判定: 要最適化 (> 50ms)")
+
+    # ── 消費・補助統計 ─────────────────────────────────────────────
+    from layer0.schemas.event import EventType as ET
+    heal_events   = [e for e in sim.event_log if e.event_type == ET.HEALING_DONE]
+    safety_events = [e for e in sim.event_log if e.event_type == ET.SAFETY_NET_PAID]
+    upkeep_events = [e for e in sim.event_log if e.event_type == ET.UPKEEP_PAID]
+    gov_rewards   = [e for e in sim.event_log if e.event_type == ET.GOVERNANCE_REWARD]
+    print(f"\n=== 経済循環 ===")
+    total_upkeep = len(upkeep_events) * 0.20
+    total_heal   = sum(e.payload.get("cost", 0) for e in heal_events)
+    total_safety = len(safety_events) * 5.0
+    total_gov_r  = sum(e.payload.get("reward", 0) for e in gov_rewards)
+    print(f"  維持費総額   : {total_upkeep:.1f} EC ({len(upkeep_events)}件)")
+    print(f"  Medic治療費  : {total_heal:.1f} EC ({len(heal_events)}件)")
+    print(f"  セーフティNet: {total_safety:.1f} EC ({len(safety_events)}件)")
+    print(f"  Governor報酬 : {total_gov_r:.1f} EC ({len(gov_rewards)}件)")
+    medics = [a for a in sim.agents if a.role.value == "Medic"]
+    if medics:
+        print(f"\n  Medic 収支:")
+        for m in medics:
+            heals = [e for e in heal_events if e.agent_id == m.agent_id]
+            earned = sum(e.payload.get("cost", 0) for e in heals)
+            print(f"    {m.agent_id}: 治療{len(heals)}件  獲得{earned:.1f} EC  残高{m.balance:.1f} EC")
 
     sim.save_log("logs/scale_test_events.jsonl")
     print(f"\nログ保存: logs/scale_test_events.jsonl")

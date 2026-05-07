@@ -9,7 +9,7 @@ from layer0.core.task import Task, TaskStatus, TaskType, make_task, TASK_PARAMS,
 from layer0.core.economy import Economy
 from layer0.core.policy import PolicyEngine
 from layer0.core.safety import SafetyGate
-from layer0.core.ai import RoleAI, make_ai, GovernorAI
+from layer0.core.ai import RoleAI, make_ai, GovernorAI, MedicAI
 from layer0.schemas.event import Event, EventType
 from layer0.schemas.state import StateSnapshot, AgentSnapshot, TaskSnapshot, EconomySnapshot
 
@@ -50,12 +50,6 @@ class Simulator:
         self.agents.append(agent)
 
     def spawn_task(self, task_type: Optional[TaskType] = None) -> Task:
-        while True:
-            x = self.rng.randint(1, self.world.width - 2)
-            y = self.rng.randint(1, self.world.height - 2)
-            if self.world.is_passable(x, y):
-                break
-        # タスクタイプを重み付きランダムで選択
         if task_type is None:
             types, weights = zip(*TASK_TYPE_WEIGHTS)
             cumulative = []
@@ -65,6 +59,25 @@ class Simulator:
                 cumulative.append(acc)
             r = self.rng.random()
             task_type = next(t for t, c in zip(types, cumulative) if r <= c)
+
+        # MICRO タスクはエージェント近傍にスポーン
+        if task_type == TaskType.MICRO and self.agents:
+            ref = self.rng.choice(self.agents)
+            for _ in range(30):
+                dx = self.rng.randint(-5, 5)
+                dy = self.rng.randint(-5, 5)
+                x = max(1, min(self.world.width - 2, ref.x + dx))
+                y = max(1, min(self.world.height - 2, ref.y + dy))
+                if self.world.is_passable(x, y):
+                    break
+            else:
+                x, y = ref.x, ref.y
+        else:
+            while True:
+                x = self.rng.randint(1, self.world.width - 2)
+                y = self.rng.randint(1, self.world.height - 2)
+                if self.world.is_passable(x, y):
+                    break
 
         params = TASK_PARAMS[task_type]
         r_lo, r_hi = params["reward_range"]
@@ -84,7 +97,7 @@ class Simulator:
 
     def step(self) -> StateSnapshot:
         self.tick += 1
-        # 40% の確率でスポーン（平均 2.5 tick に 1 件）
+        # 40% の確率でスポーン（うち MICRO はエージェント近傍）
         if self.rng.random() < 0.40:
             self.spawn_task()
         # 期限切れタスクを失効させる
@@ -110,6 +123,10 @@ class Simulator:
             self._seq += 1
             e.sequence_id = self._seq
         self.event_log.extend(policy_events)
+        # 維持費（全エージェント）
+        self._deduct_upkeep()
+        # セーフティネット
+        self._apply_safety_net()
         # Role AI — 各エージェントの戦略決定
         self._run_ai()
         # Governor policy proposals
@@ -118,6 +135,8 @@ class Simulator:
         self._move_agents()
         self._work_agents()
         self._charge_agents()
+        # Medic 治療サービス
+        self._heal_agents()
         snap = self._snapshot()
         self.snapshots.append(snap)
         return snap
@@ -170,6 +189,15 @@ class Simulator:
                            data={"action": action, "voters": voters,
                                  "consensus_factor": consensus_factor,
                                  "params_after": dict(self.policy_params)})
+                # 投票した Governor に統治報酬を分配
+                for gov_id in voters:
+                    gov_agent = self._get_agent(gov_id)
+                    if gov_agent and self.economy.pay_governance_reward(gov_id, self.tick, consensus_factor):
+                        reward = round(Economy.GOVERNANCE_REWARD * consensus_factor, 1)
+                        gov_agent.balance += reward
+                        self._emit(EventType.GOVERNANCE_REWARD, agent_id=gov_id,
+                                   data={"action": action, "reward": reward,
+                                         "consensus_factor": consensus_factor})
 
     def _apply_policy(self, proposal: Dict, factor: float = 1.0) -> None:
         action = proposal.get("action")
@@ -208,6 +236,54 @@ class Simulator:
             self.emit_market(event_name=kind,
                              details={"duration": duration,
                                       "reward_multiplier": self.policy_params["reward_multiplier"]})
+
+    def _deduct_upkeep(self) -> None:
+        for agent in self.agents:
+            cost = Economy.UPKEEP_COST
+            agent.balance = max(0.0, agent.balance - cost)
+            self.economy.pay_upkeep(agent.agent_id, self.tick)
+            self._emit(EventType.UPKEEP_PAID, agent_id=agent.agent_id,
+                       data={"amount": cost, "balance": round(agent.balance, 2)})
+
+    def _apply_safety_net(self) -> None:
+        for agent in self.agents:
+            if agent.balance < Economy.SAFETY_NET_THRESHOLD:
+                if self.economy.pay_safety_net(agent.agent_id, self.tick):
+                    agent.balance += Economy.SAFETY_NET_AMOUNT
+                    self._emit(EventType.SAFETY_NET_PAID, agent_id=agent.agent_id,
+                               data={"amount": Economy.SAFETY_NET_AMOUNT,
+                                     "balance": round(agent.balance, 1),
+                                     "tax_pool": round(self.economy.tax_pool, 1)})
+
+    def _heal_agents(self) -> None:
+        for medic in self.agents:
+            if medic.role != AgentRole.MEDIC:
+                continue
+            ai = self._ai.get(medic.agent_id)
+            if not isinstance(ai, MedicAI):
+                continue
+            # Medic の位置と同じかまたは隣接するエージェントを治療
+            for client in self.agents:
+                if client.agent_id == medic.agent_id:
+                    continue
+                dist = abs(client.x - medic.x) + abs(client.y - medic.y)
+                if dist > 1:
+                    continue
+                if client.energy >= ai.HEAL_ENERGY_BELOW:
+                    continue
+                if client.balance < ai.MIN_CLIENT_BALANCE:
+                    continue
+                heal = min(ai.HEAL_AMOUNT, Agent.MAX_ENERGY - client.energy)
+                cost = round(max(1.0, heal * ai.HEAL_PRICE_RATE), 1)
+                if client.balance < cost:
+                    continue
+                client.energy = min(Agent.MAX_ENERGY, client.energy + heal)
+                client.balance -= cost
+                medic.balance  += cost
+                self._emit(EventType.HEALING_DONE, agent_id=medic.agent_id,
+                           data={"target_id": client.agent_id, "heal": heal,
+                                 "cost": cost, "medic_balance": round(medic.balance, 1)})
+                break  # 1tic につき1体のみ治療
 
     def _expire_tasks(self) -> None:
         """期限切れタスク（URGENT など）を失効させる。"""
@@ -369,6 +445,7 @@ class Simulator:
             "policy_efficiency": scores.get("efficiency", 0),
             "policy_equality": scores.get("equality", 0),
             "policy_violations": len(self.policy.violations),
+            "tax_pool": round(self.economy.tax_pool, 1),
         }
 
     def save_log(self, path: str = "logs/events.jsonl") -> None:

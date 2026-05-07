@@ -87,10 +87,12 @@ class TestMarketEvents:
     def test_boom_increases_reward_multiplier(self):
         """Boom イベント発火時、reward_multiplier が上昇する。"""
         sim = Simulator(seed=7)
+        # 確実に boom が発火するよう次の市場イベントを近づける
+        sim._next_market_event = 5
         for i in range(3):
             sim.add_agent(Agent(f"w{i}", AgentRole.WORKER, 2 + i, 2))
         peak_multiplier = 1.0
-        for _ in range(150):
+        for _ in range(200):
             sim.step()
             if sim.policy_params["reward_multiplier"] > peak_multiplier:
                 peak_multiplier = sim.policy_params["reward_multiplier"]
