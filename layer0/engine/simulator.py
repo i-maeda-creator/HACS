@@ -92,6 +92,14 @@ class Simulator:
         self._portfolios: Dict[str, Dict[str, int]] = {}
         self._next_stock_event: int = self.rng.randint(15, 35)
         self._dividend_countdown: int = 30
+        # ── 弾劾・クーデター ──────────────────────────────────────────
+        self._impeachment_pressure: Dict[str, int] = {}  # governor_id → 連続不満tick数
+        self._impeached_governors: set = set()           # 弾劾済み Governor ID
+        self._power_vacuum_until: int = 0                # 権力空白期間の終了 tick
+        self._rebel_governor: Optional[str] = None       # クーデター成功者のID
+        self._rebel_until: int = 0                       # 反乱統治の終了 tick
+        self._coup_count: int = 0
+        self._impeachment_count: int = 0
 
     def add_agent(self, agent: Agent) -> None:
         idx = self._role_counts.get(agent.role, 0)
@@ -241,6 +249,9 @@ class Simulator:
         # 銀行・株式市場
         self._run_bank()
         self._run_stock_market()
+        # 弾劾・クーデター
+        self._run_impeachment_check()
+        self._run_coup_check()
         # 特性進化（25tick毎）
         if self.tick % 25 == 0:
             self._evolve_traits()
@@ -1039,7 +1050,15 @@ class Simulator:
 
     # ── 感情・暴動 ─────────────────────────────────────────────────────
     def _update_emotions(self) -> None:
-        """感情の伝染と自然減衰。エネルギー低下・逮捕でネガティブ化。"""
+        """感情の伝染と自然減衰。エネルギー低下・逮捕・階級格差でネガティブ化。"""
+        # 階級意識: Governor の平均残高が Worker の2倍以上なら Workers がフラスト
+        governors = [a for a in self.agents if a.role == AgentRole.GOVERNOR]
+        workers   = [a for a in self.agents if a.role == AgentRole.WORKER
+                     and a.agent_id not in self._koan_agents]
+        gov_avg_bal = (sum(g.balance for g in governors) / len(governors)) if governors else 0.0
+        wrk_avg_bal = (sum(w.balance for w in workers) / len(workers)) if workers else 0.0
+        class_anger = max(0.0, (gov_avg_bal - wrk_avg_bal * 1.2) / 60.0) * 0.40
+
         for agent in self.agents:
             # 自然減衰（中立に戻る）
             if agent.emotion_level > 0:
@@ -1055,6 +1074,14 @@ class Simulator:
             # 逮捕中は怒り
             if agent.arrested_until is not None and self.tick <= agent.arrested_until:
                 agent.emotion_level = max(-10.0, agent.emotion_level - 1.5)
+            # 失業フラストレーション: アイドルWorkerが長く仕事なし
+            if (agent.role == AgentRole.WORKER
+                    and agent.status == AgentStatus.IDLE
+                    and agent.assigned_task_id is None):
+                agent.emotion_level = max(-10.0, agent.emotion_level - 0.35)
+            # 階級意識: Governor が豊かすぎると Worker が怒る
+            if agent.role == AgentRole.WORKER and class_anger > 0:
+                agent.emotion_level = max(-10.0, agent.emotion_level - class_anger)
         # 感情伝染（半径2以内のエージェント同士で伝播）
         for agent in self.agents:
             neighbors = [a for a in self.agents
@@ -1593,6 +1620,138 @@ class Simulator:
                 agent.charge()
                 agent.status = AgentStatus.CHARGING
                 self._emit(EventType.AGENT_CHARGED, agent_id=agent.agent_id, data={"energy": agent.energy})
+
+    # ── 弾劾・クーデター ──────────────────────────────────────────────────
+
+    IMPEACHMENT_THRESHOLD = 0.20  # Worker の 20%+ が不満（emotion<-1.5）→ 弾劾圧力
+    IMPEACHMENT_TICKS     = 3     # 連続何tick で弾劾成立
+    REBEL_REIGN_TICKS     = 40    # クーデター成功者の統治期間
+
+    def _run_impeachment_check(self) -> None:
+        """Worker 不満率に応じて Governor への弾劾圧力を更新。閾値超過で弾劾執行。"""
+        # 序盤は経済が安定していないため弾劾を猶予
+        if self.tick < 40:
+            return
+        # 反乱統治中は通常の Governor チェックを省略
+        if self._rebel_governor is not None and self.tick <= self._rebel_until:
+            if self.tick == self._rebel_until:
+                self._end_rebel_reign()
+            return
+
+        governors = [a for a in self.agents
+                     if a.role == AgentRole.GOVERNOR
+                     and a.agent_id not in self._impeached_governors]
+        if not governors:
+            return
+
+        workers = [a for a in self.agents if a.role == AgentRole.WORKER
+                   and a.agent_id not in self._koan_agents]
+        if not workers:
+            return
+
+        dissatisfied = [w for w in workers if w.emotion_level < -1.5]
+        ratio = len(dissatisfied) / len(workers)
+
+        if ratio >= self.IMPEACHMENT_THRESHOLD:
+            for gov in governors:
+                prev = self._impeachment_pressure.get(gov.agent_id, 0)
+                self._impeachment_pressure[gov.agent_id] = prev + 1
+                self._emit(EventType.IMPEACHMENT_PRESSURE, agent_id=gov.agent_id,
+                           data={"dissatisfied_ratio": round(ratio, 3),
+                                 "pressure": self._impeachment_pressure[gov.agent_id],
+                                 "threshold": self.IMPEACHMENT_TICKS})
+                if self._impeachment_pressure[gov.agent_id] >= self.IMPEACHMENT_TICKS:
+                    self._impeach_governor(gov)
+        else:
+            for gov in governors:
+                cur = self._impeachment_pressure.get(gov.agent_id, 0)
+                if cur > 0:
+                    self._impeachment_pressure[gov.agent_id] = max(0, cur - 1)
+
+    def _impeach_governor(self, gov: "Agent") -> None:  # type: ignore[name-defined]
+        seized = round(gov.balance * 0.40, 1)
+        gov.balance = max(0.0, gov.balance - seized)
+        gov.emotion_level = max(-10.0, gov.emotion_level - 5.0)
+        self.economy.tax_pool += seized
+        self._impeached_governors.add(gov.agent_id)
+        self._impeachment_pressure.pop(gov.agent_id, None)
+        self._impeachment_count += 1
+        self._power_vacuum_until = self.tick + 20
+        self._emit(EventType.GOVERNOR_IMPEACHED, agent_id=gov.agent_id,
+                   data={"seized": seized,
+                         "balance_after": round(gov.balance, 1),
+                         "power_vacuum_until": self._power_vacuum_until})
+
+    def _run_coup_check(self) -> None:
+        """権力の空白期間中にクーデター宣言者が現れるかチェック。"""
+        if self.tick > self._power_vacuum_until or self._power_vacuum_until == 0:
+            return
+        if self._rebel_governor is not None:
+            return
+        # 宣言確率 20%/tick（空白の中盤以降に高まる）
+        elapsed = self.tick - (self._power_vacuum_until - 20)
+        coup_prob = 0.10 + elapsed * 0.015
+        if self.rng.random() > min(0.65, coup_prob):
+            return
+
+        # 候補: 経験値最大の Worker（CHRONO は bonus +3）
+        candidates = [a for a in self.agents
+                      if a.role == AgentRole.WORKER
+                      and a.agent_id not in self._koan_agents
+                      and a.arrested_until is None]
+        if not candidates:
+            return
+        leader = max(candidates, key=lambda a: a.experience + (3 if a.expires_at is not None else 0))
+
+        # Guardian の支持: 過半数が支持すればクーデター成功
+        guardians = [a for a in self.agents if a.role == AgentRole.GUARDIAN]
+        support_count = sum(1 for g in guardians
+                            if self.rng.random() < 0.55)  # 各 Guardian が 55% 確率で支持
+        success = support_count >= max(1, len(guardians) // 2)
+
+        if success:
+            self._launch_coup(leader, support_count, len(guardians))
+        else:
+            # 失敗 → 主導者を公安が逮捕（証拠として記録）
+            leader.arrested_until = self.tick + 10
+            leader.emotion_level = max(-10.0, leader.emotion_level - 4.0)
+            self._coup_count += 1
+            self._power_vacuum_until = 0  # 空白終了
+            self._emit(EventType.COUP_FAILED, agent_id=leader.agent_id,
+                       data={"support": support_count, "guardians": len(guardians),
+                             "experience": leader.experience,
+                             "is_chrono": leader.expires_at is not None})
+
+    def _launch_coup(self, leader: "Agent", support: int, total_guardians: int) -> None:  # type: ignore[name-defined]
+        """クーデター成功: Workerが暫定 Governor として統治を開始。"""
+        leader.role = AgentRole.GOVERNOR
+        self._ai[leader.agent_id] = make_ai(AgentRole.GOVERNOR, index=99)
+        self._rebel_governor = leader.agent_id
+        self._rebel_until = self.tick + self.REBEL_REIGN_TICKS
+        self._coup_count += 1
+        self._power_vacuum_until = 0
+        # クーデター成功の喜び
+        leader.emotion_level = min(10.0, leader.emotion_level + 5.0)
+        self._emit(EventType.COUP_SUCCEEDED, agent_id=leader.agent_id,
+                   data={"support": support, "guardians": total_guardians,
+                         "experience": leader.experience,
+                         "rebel_until": self._rebel_until,
+                         "is_chrono": leader.expires_at is not None})
+
+    def _end_rebel_reign(self) -> None:
+        """反乱統治の任期終了: Leader を Worker に戻す。"""
+        if self._rebel_governor is None:
+            return
+        agent = self._get_agent(self._rebel_governor)
+        if agent:
+            agent.role = AgentRole.WORKER
+            self._ai[agent.agent_id] = make_ai(AgentRole.WORKER, index=99)
+            agent.emotion_level = max(-5.0, agent.emotion_level - 2.0)
+            self._emit(EventType.REBEL_RESIGNED, agent_id=agent.agent_id,
+                       data={"reigned_ticks": self.REBEL_REIGN_TICKS,
+                             "balance": round(agent.balance, 1)})
+        self._rebel_governor = None
+        self._rebel_until = 0
 
     def _emit(self, event_type: EventType, agent_id: Optional[str] = None,
               task_id: Optional[str] = None, data: Optional[Dict] = None) -> None:

@@ -377,6 +377,28 @@ def main():
         print(f"    tick={p.tick:3d}  {p.payload.get('action','?'):16s}  "
               f"voters={p.payload.get('voters')}")
 
+    # ── 弾劾・クーデター ─────────────────────────────────────────
+    imp_events   = [e for e in sim.event_log if e.event_type == ET.GOVERNOR_IMPEACHED]
+    coup_ok      = [e for e in sim.event_log if e.event_type == ET.COUP_SUCCEEDED]
+    coup_fail    = [e for e in sim.event_log if e.event_type == ET.COUP_FAILED]
+    rebel_end    = [e for e in sim.event_log if e.event_type == ET.REBEL_RESIGNED]
+    pressures    = [e for e in sim.event_log if e.event_type == ET.IMPEACHMENT_PRESSURE]
+    print(f"\n=== 弾劾・クーデター ===")
+    print(f"  弾劾成立    : {len(imp_events)}件")
+    for e in imp_events:
+        print(f"    tick{e.tick:3d}: {e.agent_id} 弾劾 — {e.payload.get('seized',0):.1f}EC没収")
+    print(f"  クーデター成功: {len(coup_ok)}件")
+    for e in coup_ok:
+        chrono = "（時間旅行者）" if e.payload.get("is_chrono") else ""
+        print(f"    tick{e.tick:3d}: {e.agent_id}{chrono} 反乱政府樹立 "
+              f"(Guardian支持 {e.payload.get('support',0)}/{e.payload.get('guardians',0)})")
+    print(f"  クーデター失敗: {len(coup_fail)}件")
+    print(f"  反乱統治終了  : {len(rebel_end)}件")
+    if pressures:
+        max_p = max(e.payload.get("pressure", 0) for e in pressures)
+        max_r = max(e.payload.get("dissatisfied_ratio", 0) for e in pressures)
+        print(f"  最大弾劾圧力  : {max_p}tick連続  最大不満率: {max_r*100:.1f}%")
+
     # ── 時空歪曲 ────────────────────────────────────────────────
     chrono_arrivals  = [e for e in sim.event_log if e.event_type == ET.CHRONO_ARRIVAL]
     chrono_exposures = [e for e in sim.event_log if e.event_type == ET.TEMPORAL_EXPOSURE]
@@ -399,6 +421,16 @@ def main():
 
     sim.save_log("logs/scale_test_events.jsonl")
     print(f"\nログ保存: logs/scale_test_events.jsonl")
+
+    # ── ナラティブエクスポーター ──────────────────────────────────
+    from layer0.export.narrative_exporter import NarrativeExporter
+    exporter = NarrativeExporter(sim.event_log, sim.agents, ticks=TICKS)
+    newspaper = exporter.generate()
+    print(f"\n{'='*60}")
+    print(newspaper)
+    print(f"{'='*60}")
+    exporter.save("logs/city_daily.txt")
+    print(f"都市新聞保存: logs/city_daily.txt")
 
 
 if __name__ == "__main__":

@@ -361,6 +361,20 @@ class EventReplayer:
             if e.agent_id in self._agents:
                 self._agents[e.agent_id].balance += p.get("dividend", 0.0)
 
+        elif et == EventType.GOVERNOR_IMPEACHED:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance = p.get("balance_after",
+                    self._agents[e.agent_id].balance)
+
+        elif et == EventType.COUP_SUCCEEDED:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].role = "Governor"
+                self._agents[e.agent_id].status = "idle"
+
+        elif et == EventType.REBEL_RESIGNED:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].role = "Worker"
+
     # ── スナップショット作成 ─────────────────────────────────────
     def _snapshot(self, tick: int) -> WorldSnapshot:
         import copy

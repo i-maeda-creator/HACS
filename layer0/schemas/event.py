@@ -68,6 +68,13 @@ class EventType(str, Enum):
     STOCK_SOLD            = "StockSold"        # 株売却
     STOCK_DIVIDEND        = "StockDividend"    # 配当
     MARKET_CRASH          = "MarketCrash"      # 株式市場クラッシュ
+    # ── 弾劾・クーデター ───────────────────────────────────────────────
+    IMPEACHMENT_PRESSURE  = "ImpeachmentPressure"  # Worker不満が蓄積 → 弾劾圧力
+    GOVERNOR_IMPEACHED    = "GovernorImpeached"    # Governor弾劾成立
+    COUP_DECLARED         = "CoupDeclared"         # クーデター宣言
+    COUP_SUCCEEDED        = "CoupSucceeded"        # クーデター成功 → 反乱政府樹立
+    COUP_FAILED           = "CoupFailed"           # クーデター失敗 → 主導者逮捕
+    REBEL_RESIGNED        = "RebelResigned"        # 反乱政府の任期終了 → Worker復帰
 
 
 # EventType → MQTT トピックのマッピング
