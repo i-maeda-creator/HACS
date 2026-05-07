@@ -51,6 +51,8 @@ class Simulator:
         # 次のCHRONO訪問者出現tick
         self._next_chrono_arrival: int = self.rng.randint(40, 80)
         self._chrono_count: int = 0
+        # CHRONO 疑惑度: agent_id → float（15で正体発覚）
+        self._chrono_suspicion: Dict[str, float] = {}
 
     def add_agent(self, agent: Agent) -> None:
         idx = self._role_counts.get(agent.role, 0)
@@ -152,6 +154,7 @@ class Simulator:
         self._process_temporal_loans()
         self._run_time_market()
         self._maybe_chrono_arrival()
+        self._update_chrono_suspicion()
         self._expire_chrono_agents()
         # パトロール給与（Guardian/Observer）
         self._pay_patrol_salary()
@@ -587,6 +590,7 @@ class Simulator:
                    data={"event": event_name, **details})
 
     def _run_auctions(self) -> None:
+        from layer0.core.ai import WorkerAI, WorkerTrait
         open_tasks = [t for t in self.tasks if t.status == TaskStatus.OPEN]
         for task in open_tasks:
             task.bids.clear()
@@ -607,6 +611,10 @@ class Simulator:
                     bid_amount *= role_bonus
                     if agent.role == AgentRole.WORKER:
                         bid_amount += self.policy_params["worker_bid_bonus"]
+                    # CHRONO 疑惑が高い場合はカモフラージュ（入札を意図的に下げて目立たない）
+                    if (isinstance(ai, WorkerAI) and ai.trait == WorkerTrait.CHRONO
+                            and self._chrono_suspicion.get(agent.agent_id, 0.0) > 8.0):
+                        bid_amount *= self.rng.uniform(0.50, 0.80)
                     bid = round(bid_amount, 1)
                     task.submit_bid(agent.agent_id, bid)
                     self._emit(EventType.BID_SUBMITTED, agent_id=agent.agent_id, task_id=task.task_id,
@@ -622,9 +630,82 @@ class Simulator:
                     winning_bid = next((b.amount for b in task.bids if b.agent_id == winner_id), 0)
                     total_bids = sum(b.amount for b in task.bids)
                     win_prob = round(winning_bid / total_bids, 3) if total_bids > 0 else 1.0
+                    # CHRONO が落札するたびに疑惑度が上昇（完璧すぎる入札に気づかれる）
+                    w_ai = self._ai.get(winner_id)
+                    if isinstance(w_ai, WorkerAI) and w_ai.trait == WorkerTrait.CHRONO:
+                        self._chrono_suspicion[winner_id] = (
+                            self._chrono_suspicion.get(winner_id, 0.0) + 2.5)
                     self._emit(EventType.TASK_ASSIGNED, agent_id=winner_id, task_id=task.task_id,
                                data={"target_x": task.x, "target_y": task.y, "bid": winning_bid,
                                      "win_prob": win_prob, "num_bidders": len(task.bids)})
+
+    def _update_chrono_suspicion(self) -> None:
+        """CHRONO エージェントの正体発覚疑惑度を更新。Guardian 近接・連勝で上昇、自然減衰。"""
+        from layer0.core.ai import WorkerAI, WorkerTrait, GuardianAI, GuardianPersonality
+        to_expose = []
+        for agent in self.agents:
+            if agent.expires_at is None:
+                continue
+            ai = self._ai.get(agent.agent_id)
+            if not isinstance(ai, WorkerAI) or ai.trait != WorkerTrait.CHRONO:
+                continue
+            if agent.agent_id not in self._chrono_suspicion:
+                self._chrono_suspicion[agent.agent_id] = 0.0
+            # 自然減衰（-0.3/tick — 目立たなければ疑惑は薄れる）
+            self._chrono_suspicion[agent.agent_id] = max(
+                0.0, self._chrono_suspicion[agent.agent_id] - 0.3)
+            # Guardian 近接チェック（半径3以内）
+            for guard in self.agents:
+                if guard.role != AgentRole.GUARDIAN:
+                    continue
+                dist = abs(guard.x - agent.x) + abs(guard.y - agent.y)
+                if dist > 3:
+                    continue
+                g_ai = self._ai.get(guard.agent_id)
+                if isinstance(g_ai, GuardianAI) and g_ai.personality in (
+                        GuardianPersonality.AGGRESSIVE, GuardianPersonality.VIGILANT):
+                    self._chrono_suspicion[agent.agent_id] += 2.5
+                else:
+                    self._chrono_suspicion[agent.agent_id] += 0.8
+            if self._chrono_suspicion[agent.agent_id] >= 15.0:
+                to_expose.append(agent)
+        for agent in to_expose:
+            self._expose_chrono(agent)
+
+    def _expose_chrono(self, agent: Agent) -> None:
+        """CHRONO 正体発覚 — 知識爆発 + 大規模パラドックス波。"""
+        suspicion = self._chrono_suspicion.pop(agent.agent_id, 0.0)
+        # 半径5以内の近隣エージェントに知識 + 遺産を分配
+        close = [a for a in self.agents
+                 if a.agent_id != agent.agent_id
+                 and abs(a.x - agent.x) + abs(a.y - agent.y) <= 5]
+        exp_leak       = agent.experience // 3
+        knowledge_share = round(exp_leak * 0.5 / max(len(close), 1), 1) if close else 0.0
+        legacy_share    = round(agent.balance * 0.6 / max(len(close), 1), 1) if close else 0.0
+        total_share     = round(knowledge_share + legacy_share, 1)
+        for a in close:
+            a.balance += total_share
+        # 大規模パラドックス波（半径3: ±15 EC、半径4-5: ±5 EC）
+        for a in self.agents:
+            if a.agent_id == agent.agent_id:
+                continue
+            dist = abs(a.x - agent.x) + abs(a.y - agent.y)
+            if dist <= 3:
+                ripple = round(self.rng.uniform(-15.0, 15.0), 1)
+                a.balance = max(0.0, a.balance + ripple)
+            elif dist <= 5:
+                ripple = round(self.rng.uniform(-5.0, 5.0), 1)
+                a.balance = max(0.0, a.balance + ripple)
+        self._emit(EventType.TEMPORAL_EXPOSURE, agent_id=agent.agent_id,
+                   data={"suspicion": round(suspicion, 1),
+                         "experience_leaked": exp_leak,
+                         "share_per_agent": total_share,
+                         "close_agents": [a.agent_id for a in close],
+                         "x": agent.x, "y": agent.y})
+        self.agents.remove(agent)
+        self._ai.pop(agent.agent_id, None)
+        self._temporal_loans.pop(agent.agent_id, None)
+        self._temporal_stress += 5
 
     def _move_agents(self) -> None:
         for agent in self.agents:

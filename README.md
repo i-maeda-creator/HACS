@@ -35,7 +35,7 @@ Layer0 が生成したイベントを MQTT が中継し、Layer3 が監視・制
 | **Medic** | ⚪ 白 | 低エネルギーのエージェントに接近し治療サービスを提供 | 治療費（EC） |
 | **Architect** | 🟡 黄 | 建設タスク専門。完成した建物が毎tick不労所得を生む | 建設報酬 + 建物収入 |
 
-### Worker 5種の性格特性
+### Worker 11種の性格特性
 
 | 特性 | 戦略 |
 |------|------|
@@ -44,6 +44,23 @@ Layer0 が生成したイベントを MQTT が中継し、Layer3 が監視・制
 | **SPECIALIST** | HEAVYタスクに超積極的、それ以外は消極的 |
 | **EXPLORER** | 距離ペナルティほぼゼロ。広域をカバー |
 | **OPPORTUNIST** | 競合の少ないセクターを狙い撃ち |
+| **GAMBLER** | 博打師：120〜180%の大博打入札 |
+| **NIHILIST** | 虚無主義者：15%確率で意図的入札拒否 |
+| **CONFORMIST** | 同調者：直前の推定落札額に追随 |
+| **REBEL** | 反逆者：報酬20EC超を「搾取」として拒否 |
+| **DRIFTER** | 漂流者：どこでもそこそこ、専門なし |
+| **CHRONO** | 🕰️ 時間旅行者：未来から来た存在。完璧な入札で登場・期限付き消滅 |
+
+### 全役職に3種の性格
+
+| 役職 | 性格バリエーション |
+|------|-----------------|
+| Guardian | STOIC / AGGRESSIVE / VIGILANT |
+| Trader | ANALYST / SHARK / SPECULATOR |
+| Observer | SYSTEMATIC / VISIONARY / INFORMANT |
+| Governor | BALANCED / POPULIST / CONSERVATIVE |
+| Medic | PROFESSIONAL / MERCENARY / SELFLESS |
+| Architect | BUILDER / MONOPOLIST / URBANIST |
 
 ---
 
@@ -83,6 +100,40 @@ Architect が建物を増やすほど課税率が上昇。資本の独占を抑�
 
 ### 建物減価償却
 建物は **50tick で自然崩壊**。Architect は新しい建設タスクを取り続けないと収入が途絶える。建物セルを通過したエージェントはエネルギーを +0.3 回収（インフラ恩恵）。
+
+### 時空歪曲メカニクス
+
+| メカニクス | 説明 |
+|-----------|------|
+| **Temporal Loan** | 残高低下時に +15 EC 借入。15tick 後に 22 EC 返済義務 |
+| **Paradox Collapse** | 返済不能 → 残高ランダムリセット + 半径3の全員に ±6 EC ゆらぎ |
+| **Causality Loop** | タスク完了の10%確率で同種タスクが「過去から召喚」される |
+| **CHRONO Arrival** | 40〜80tick 毎に時間旅行者が登場。高経験値・高残高で出現 |
+| **CHRONO Departure** | 期限切れで消滅。残高40%を近隣3体に「時空遺産」として残す |
+
+### CHRONO 正体発覚システム
+
+時間旅行者は**正体を悟られてはならない**。疑惑度が 15 を超えると正体発覚。
+
+```
+疑惑度上昇:
+  + 2.5 落札するたびに（完璧すぎる入札が怪しまれる）
+  + 2.5/tick AGGRESSIVE/VIGILANT Guardian が半径3以内
+  + 0.8/tick 通常Guardian が半径3以内
+  - 0.3/tick 自然減衰（目立たなければ疑惑は薄れる）
+
+疑惑 > 8:   カモフラージュ発動 → 入札を意図的に 50〜80% まで下げる
+疑惑 ≥ 15:  TEMPORAL_EXPOSURE！
+  → 知識爆発（周囲に experience × 0.5 EC を分配）
+  → 残高60%を半径5以内に均等配布
+  → 大規模パラドックス波（半径3: ±15 EC、半径4-5: ±5 EC）
+  → エージェント即時消滅
+```
+
+**実際に確認された挙動（67agent / 200tick）:**
+- CHR1: tick 47 出現 → tick 63 正体発覚（16tick で捕捉）
+- CHR2: tick 123 出現 → tick 138 正体発覚（15tick で捕捉）  
+- CHR3: tick 192 出現 → 200tick まで生存（唯一の生還者）
 
 ---
 
@@ -183,7 +234,7 @@ hacs/
 │   │   ├── economy.py        # 税プール・報酬・セーフティネット
 │   │   ├── policy.py         # PolicyEngine（制約・目標）
 │   │   ├── safety.py         # SafetyGate（夜間制限・緊急停止）
-│   │   ├── ai.py             # 7役職AI + Worker 5特性
+│   │   ├── ai.py             # 7役職AI + Worker 11特性 + 全役職3種性格
 │   │   └── event_sourcing.py # EventReplayer（イベントから状態再構築）
 │   ├── engine/
 │   │   └── simulator.py      # メインシミュレーター

@@ -240,6 +240,14 @@ class EventReplayer:
                     status="idle",
                 )
 
+        elif et == EventType.TEMPORAL_EXPOSURE:
+            share = p.get("share_per_agent", 0.0)
+            for rid in p.get("close_agents", []):
+                if rid in self._agents:
+                    self._agents[rid].balance += share
+            if e.agent_id and e.agent_id in self._agents:
+                del self._agents[e.agent_id]
+
         elif et == EventType.CHRONO_DEPARTURE:
             # 時空遺産を近隣エージェントへ
             share = p.get("legacy_share", 0.0)
