@@ -210,6 +210,46 @@ class EventReplayer:
                 self._agents[client_id].balance  = max(0.0, self._agents[client_id].balance - cost)
                 self._agents[client_id].energy   = min(100.0, self._agents[client_id].energy + heal)
 
+        elif et == EventType.TEMPORAL_LOAN:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance += p.get("borrowed", 0.0)
+
+        elif et == EventType.TEMPORAL_REPAYMENT:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance = max(
+                    0.0, self._agents[e.agent_id].balance - p.get("repaid", 0.0))
+
+        elif et == EventType.PARADOX_COLLAPSE:
+            if p.get("type") == "ripple":
+                if e.agent_id in self._agents:
+                    self._agents[e.agent_id].balance = max(
+                        0.0, self._agents[e.agent_id].balance + p.get("ripple", 0.0))
+            else:
+                if e.agent_id in self._agents:
+                    self._agents[e.agent_id].balance = p.get("new_balance", 0.0)
+
+        elif et == EventType.CHRONO_ARRIVAL:
+            # 時間旅行者が時間軸に出現 → 新規 AgentState を登録
+            aid = e.agent_id
+            if aid and aid not in self._agents:
+                self._agents[aid] = AgentState(
+                    agent_id=aid, role=p.get("role", "Worker"),
+                    x=p.get("x", 0), y=p.get("y", 0),
+                    energy=p.get("energy", 100.0),
+                    balance=p.get("balance", 0.0),
+                    status="idle",
+                )
+
+        elif et == EventType.CHRONO_DEPARTURE:
+            # 時空遺産を近隣エージェントへ
+            share = p.get("legacy_share", 0.0)
+            for rid in p.get("recipients", []):
+                if rid in self._agents:
+                    self._agents[rid].balance += share
+            # エージェントを状態から消去
+            if e.agent_id in self._agents:
+                del self._agents[e.agent_id]
+
         elif et == EventType.MEMORY_TRADE:
             trader_id = e.agent_id
             action    = p.get("action")

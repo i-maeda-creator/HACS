@@ -33,8 +33,9 @@ class Agent:
     target_x: Optional[int] = None
     target_y: Optional[int] = None
     assigned_task_id: Optional[str] = None
-    experience: int = 0    # 完了タスク数（記憶資本 — Memory Marketで売買可能）
-    memory_boost: int = 0  # 買った記憶が有効な残りtick数（入札ボーナス付与）
+    experience: int = 0          # 完了タスク数（記憶資本 — Memory Marketで売買可能）
+    memory_boost: int = 0        # 買った記憶が有効な残りtick数（入札ボーナス付与）
+    expires_at: Optional[int] = None  # None=永続 / int=そのtickに時間軸から消滅（CHRONO用）
 
     MOVE_COST = 0.5
     WORK_COST = 2.0

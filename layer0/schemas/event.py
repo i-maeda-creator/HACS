@@ -31,6 +31,13 @@ class EventType(str, Enum):
     BUILDING_INCOME       = "BuildingIncome"  # Architect 建物不労所得
     BASIC_INCOME_PAID     = "BasicIncomePaid" # 全員への基本所得分配
     MEMORY_TRADE          = "MemoryTrade"     # Trader による記憶売買
+    TEMPORAL_LOAN         = "TemporalLoan"    # 未来の自分からEC借入
+    TEMPORAL_REPAYMENT    = "TemporalRepayment" # ローン返済
+    PARADOX_COLLAPSE      = "ParadoxCollapse" # 返済不能→時空崩壊
+    CAUSALITY_LOOP        = "CausalityLoop"   # タスク完了が過去に干渉し同種タスク召喚
+    CHRONO_ARRIVAL        = "ChronoArrival"   # 未来エージェントが時間軸に出現
+    CHRONO_DEPARTURE      = "ChronoDeparture" # 未来エージェントが消滅
+    TEMPORAL_EXPOSURE     = "TemporalExposure"# 正体発覚 → 知識爆発・大規模パラドックス
 
 
 # EventType → MQTT トピックのマッピング

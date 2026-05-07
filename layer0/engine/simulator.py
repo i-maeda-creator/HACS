@@ -44,6 +44,13 @@ class Simulator:
         self._next_market_event: int = self.rng.randint(30, 60)
         # 建物: (x,y) → {"owner": agent_id, "durability": float, "built_tick": int}
         self._buildings: Dict[tuple, dict] = {}
+        # 時間ローン: agent_id → {"amount_due": float, "due_tick": int}
+        self._temporal_loans: Dict[str, dict] = {}
+        # 時空ストレス: パラドックスイベントのトリガーに使用
+        self._temporal_stress: int = 0
+        # 次のCHRONO訪問者出現tick
+        self._next_chrono_arrival: int = self.rng.randint(40, 80)
+        self._chrono_count: int = 0
 
     def add_agent(self, agent: Agent) -> None:
         idx = self._role_counts.get(agent.role, 0)
@@ -141,6 +148,11 @@ class Simulator:
         self._heal_agents()
         # Memory Market（Trader による記憶売買）
         self._run_memory_market()
+        # 時空歪曲メカニクス
+        self._process_temporal_loans()
+        self._run_time_market()
+        self._maybe_chrono_arrival()
+        self._expire_chrono_agents()
         # パトロール給与（Guardian/Observer）
         self._pay_patrol_salary()
         # 建物収入（Architect — 累進課税 + 減価償却）
@@ -400,6 +412,133 @@ class Simulator:
                                      "boost_ticks": 8})
                     break
 
+    # ── 時空歪曲メカニクス ───────────────────────────────────────────
+
+    LOAN_AMOUNT   = 15.0   # 借入額
+    LOAN_REPAY    = 22.0   # 返済額（1.47倍）
+    LOAN_DURATION = 15     # 返済期限（tick）
+    PARADOX_RADIUS = 3     # パラドックス崩壊の影響半径
+
+    def _run_time_market(self) -> None:
+        """時間ローン: 残高が低いエージェントが未来の自分からECを借りる。"""
+        for agent in self.agents:
+            if agent.agent_id in self._temporal_loans:
+                continue  # 既に借入中
+            if agent.expires_at is not None:
+                continue  # CHRONO エージェントは借りない
+            # 借入条件: 残高が低い + 性格に応じた閾値
+            ai = self._ai.get(agent.agent_id)
+            from layer0.core.ai import WorkerAI, WorkerTrait
+            threshold = 40.0 if (isinstance(ai, WorkerAI) and ai.trait == WorkerTrait.GAMBLER) else 18.0
+            if agent.balance < threshold and self.rng.random() < 0.25:
+                self._temporal_loans[agent.agent_id] = {
+                    "amount_due": self.LOAN_REPAY,
+                    "due_tick": self.tick + self.LOAN_DURATION,
+                }
+                agent.balance += self.LOAN_AMOUNT
+                self._temporal_stress += 1
+                self._emit(EventType.TEMPORAL_LOAN, agent_id=agent.agent_id,
+                           data={"borrowed": self.LOAN_AMOUNT, "repay": self.LOAN_REPAY,
+                                 "due_tick": self.tick + self.LOAN_DURATION,
+                                 "balance": round(agent.balance, 1),
+                                 "stress": self._temporal_stress})
+
+    def _process_temporal_loans(self) -> None:
+        """時間ローン返済処理 + 返済不能時のパラドックス崩壊。"""
+        due_agents = [aid for aid, loan in self._temporal_loans.items()
+                      if self.tick >= loan["due_tick"]]
+        for aid in due_agents:
+            loan = self._temporal_loans.pop(aid)
+            agent = self._get_agent(aid)
+            if agent is None:
+                continue
+            if agent.balance >= loan["amount_due"]:
+                # 正常返済
+                agent.balance -= loan["amount_due"]
+                self._emit(EventType.TEMPORAL_REPAYMENT, agent_id=aid,
+                           data={"repaid": loan["amount_due"],
+                                 "balance": round(agent.balance, 1)})
+            else:
+                # 返済不能 → パラドックス崩壊
+                old_balance = agent.balance
+                agent.balance = round(self.rng.uniform(0, 30), 1)
+                agent.experience = max(0, agent.experience // 2)
+                self._temporal_stress += 3
+                self._emit(EventType.PARADOX_COLLAPSE, agent_id=aid,
+                           data={"old_balance": round(old_balance, 1),
+                                 "new_balance": agent.balance,
+                                 "experience_after": agent.experience,
+                                 "stress": self._temporal_stress})
+                # 周囲エージェントへの時空ゆらぎ伝播
+                for other in self.agents:
+                    if other.agent_id == aid:
+                        continue
+                    dist = abs(other.x - agent.x) + abs(other.y - agent.y)
+                    if dist <= self.PARADOX_RADIUS:
+                        ripple = round(self.rng.uniform(-6.0, 6.0), 1)
+                        other.balance = max(0.0, other.balance + ripple)
+                        self._emit(EventType.PARADOX_COLLAPSE, agent_id=other.agent_id,
+                                   data={"type": "ripple", "ripple": ripple,
+                                         "balance": round(other.balance, 1),
+                                         "source_id": aid})
+
+    def _maybe_chrono_arrival(self) -> None:
+        """時間旅行者（CHRONO Worker）が突然出現する。高い経験値と残高を持って登場。"""
+        if self.tick < self._next_chrono_arrival:
+            return
+        self._next_chrono_arrival = self.tick + self.rng.randint(50, 100)
+        self._chrono_count += 1
+        # ランダムな出現位置
+        for _ in range(30):
+            cx = self.rng.randint(2, 17)
+            cy = self.rng.randint(2, 17)
+            if self.world.is_passable(cx, cy):
+                break
+        from layer0.core.ai import WorkerAI, WorkerTrait
+        cid = f"CHR{self._chrono_count}"
+        chrono = Agent(
+            agent_id=cid, role=AgentRole.WORKER, x=cx, y=cy,
+            energy=self.rng.uniform(60, 90),
+            balance=self.rng.uniform(50, 90),
+            experience=self.rng.randint(20, 50),  # 未来ではすでに多数完了済み
+            expires_at=self.tick + self.rng.randint(20, 35),  # 限られた滞在時間
+        )
+        idx = self._role_counts.get(AgentRole.WORKER, 0)
+        self._role_counts[AgentRole.WORKER] = idx + 1
+        ai = WorkerAI(trait=WorkerTrait.CHRONO)
+        self._ai[cid] = ai
+        self.agents.append(chrono)
+        self._emit(EventType.CHRONO_ARRIVAL, agent_id=cid,
+                   data={"x": cx, "y": cy, "role": "Worker",
+                         "energy": round(chrono.energy, 1),
+                         "balance": round(chrono.balance, 1),
+                         "experience": chrono.experience,
+                         "expires_at": chrono.expires_at,
+                         "chrono_count": self._chrono_count})
+
+    def _expire_chrono_agents(self) -> None:
+        """期限切れのCHRONOエージェントを時間軸から消滅させる。"""
+        expired = [a for a in self.agents
+                   if a.expires_at is not None and self.tick >= a.expires_at]
+        for agent in expired:
+            # 消滅前に残高の一部を近隣エージェントに「時空遺産」として残す
+            legacy = round(agent.balance * 0.4, 1)
+            nearby = sorted(
+                [a for a in self.agents if a.agent_id != agent.agent_id],
+                key=lambda a: abs(a.x - agent.x) + abs(a.y - agent.y)
+            )[:3]
+            share = round(legacy / max(len(nearby), 1), 1) if nearby else 0.0
+            for n in nearby:
+                n.balance += share
+            self._emit(EventType.CHRONO_DEPARTURE, agent_id=agent.agent_id,
+                       data={"final_balance": round(agent.balance, 1),
+                             "legacy": legacy,
+                             "legacy_share": share,
+                             "recipients": [n.agent_id for n in nearby],
+                             "experience_left": agent.experience})
+            self.agents.remove(agent)
+            del self._ai[agent.agent_id]
+
     def _heal_agents(self) -> None:
         for medic in self.agents:
             if medic.role != AgentRole.MEDIC:
@@ -545,6 +684,14 @@ class Simulator:
             agent.experience += 1
             self._emit(EventType.TASK_COMPLETED, agent_id=agent.agent_id, task_id=task.task_id,
                        data={"reward": net, "energy": round(agent.energy, 1), "balance": round(agent.balance, 1)})
+            # 因果ループ: タスク完了が過去に干渉し同種タスクを引き寄せる（10%）
+            if self.rng.random() < 0.10:
+                loop_task = self.spawn_task(task_type=task.task_type)
+                self._emit(EventType.CAUSALITY_LOOP, agent_id=agent.agent_id,
+                           task_id=task.task_id,
+                           data={"loop_task_id": loop_task.task_id,
+                                 "task_type": task.task_type.value,
+                                 "loop_reward": loop_task.reward})
             agent.assigned_task_id = None
             agent.target_x = None
             agent.target_y = None
