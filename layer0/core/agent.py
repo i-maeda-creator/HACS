@@ -37,6 +37,11 @@ class Agent:
     memory_boost: int = 0        # 買った記憶が有効な残りtick数（入札ボーナス付与）
     expires_at: Optional[int] = None  # None=永続 / int=そのtickに時間軸から消滅（CHRONO用）
     arrested_until: Optional[int] = None  # None=自由 / int=そのtickまで逮捕・行動不能
+    emotion_level: float = 0.0            # -10(怒) 〜 +10(喜)
+    generation: int = 0                   # 転生回数
+    ally_id: Optional[str] = None         # 同盟相手のagent_id
+    rival_id: Optional[str] = None        # ライバルのagent_id
+    cult_id: Optional[str] = None         # 所属カルトID
 
     MOVE_COST = 0.5
     WORK_COST = 2.0
@@ -63,3 +68,13 @@ class Agent:
 
     def needs_charge(self) -> bool:
         return self.energy < 20.0
+
+    @property
+    def emotion(self) -> str:
+        if self.emotion_level > 2.0:
+            return "happy"
+        if self.emotion_level < -5.0:
+            return "angry"
+        if self.emotion_level < -2.0:
+            return "anxious"
+        return "neutral"

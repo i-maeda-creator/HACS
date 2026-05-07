@@ -44,6 +44,30 @@ class EventType(str, Enum):
     KOAN_DEPLOYED         = "KoanDeployed"    # 公安がWorkerとして潜入配置
     KOAN_ARREST           = "KoanArrest"      # 逮捕執行 — 残高没収・活動停止
     INFORMANT_TIP         = "InformantTip"    # Observer が公安に密告
+    # ── 感情・暴動 ──────────────────────────────────────────────────────
+    EMOTION_RIOT          = "EmotionRiot"      # 怒りが35%超 → 暴動発生
+    # ── 死と転生 ───────────────────────────────────────────────────────
+    AGENT_DIED            = "AgentDied"        # エネルギー枯渇で死亡
+    AGENT_REBORN          = "AgentReborn"      # 転生（新個体として復活）
+    # ── カルト ─────────────────────────────────────────────────────────
+    CULT_JOINED           = "CultJoined"       # カルト加入
+    CULT_BUSTED           = "CultBusted"       # カルト解散
+    # ── 影の市場 ───────────────────────────────────────────────────────
+    SHADOW_DEAL           = "ShadowDeal"       # 賄賂で入札を降ろす
+    # ── 特性進化 ───────────────────────────────────────────────────────
+    TRAIT_EVOLVED         = "TraitEvolved"     # 特性が別の特性へ進化
+    # ── 銀行 ───────────────────────────────────────────────────────────
+    BANK_DEPOSIT          = "BankDeposit"      # 預金
+    BANK_INTEREST         = "BankInterest"     # 預金利息
+    BANK_WITHDRAW         = "BankWithdraw"     # 引き出し
+    BANK_LOAN             = "BankLoan"         # 融資
+    BANK_REPAYMENT        = "BankRepayment"    # 融資返済
+    BANK_DEFAULT          = "BankDefault"      # 融資デフォルト
+    # ── 株式市場 ───────────────────────────────────────────────────────
+    STOCK_BOUGHT          = "StockBought"      # 株購入
+    STOCK_SOLD            = "StockSold"        # 株売却
+    STOCK_DIVIDEND        = "StockDividend"    # 配当
+    MARKET_CRASH          = "MarketCrash"      # 株式市場クラッシュ
 
 
 # EventType → MQTT トピックのマッピング

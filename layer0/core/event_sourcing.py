@@ -290,6 +290,77 @@ class EventReplayer:
                 if buyer_id and buyer_id in self._agents:
                     self._agents[buyer_id].balance = max(0.0, self._agents[buyer_id].balance - price)
 
+        elif et == EventType.SHADOW_DEAL:
+            target_id = p.get("target_id")
+            bribe     = p.get("bribe", 0.0)
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance = max(0.0, self._agents[e.agent_id].balance - bribe)
+            if target_id and target_id in self._agents:
+                self._agents[target_id].balance += bribe
+
+        elif et == EventType.AGENT_REBORN:
+            if e.agent_id in self._agents:
+                a = self._agents[e.agent_id]
+                a.x = p.get("x", a.x)
+                a.y = p.get("y", a.y)
+                a.energy = 60.0
+                a.balance = 20.0
+                a.status = "idle"
+
+        elif et == EventType.BANK_DEPOSIT:
+            if e.agent_id in self._agents:
+                if "balance" in p:
+                    self._agents[e.agent_id].balance = p["balance"]
+                else:
+                    self._agents[e.agent_id].balance = max(
+                        0.0, self._agents[e.agent_id].balance - p.get("amount", 0.0))
+
+        elif et == EventType.BANK_INTEREST:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance += p.get("interest", 0.0)
+
+        elif et == EventType.BANK_WITHDRAW:
+            if e.agent_id in self._agents:
+                if "balance" in p:
+                    self._agents[e.agent_id].balance = p["balance"]
+                else:
+                    self._agents[e.agent_id].balance += p.get("amount", 0.0)
+
+        elif et == EventType.BANK_LOAN:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance += p.get("amount", 0.0)
+
+        elif et == EventType.BANK_REPAYMENT:
+            if e.agent_id in self._agents:
+                if "balance" in p:
+                    self._agents[e.agent_id].balance = p["balance"]
+                else:
+                    self._agents[e.agent_id].balance = max(
+                        0.0, self._agents[e.agent_id].balance - p.get("repaid", 0.0))
+
+        elif et == EventType.BANK_DEFAULT:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance = 0.0
+
+        elif et == EventType.STOCK_BOUGHT:
+            if e.agent_id in self._agents:
+                if "balance" in p:
+                    self._agents[e.agent_id].balance = p["balance"]
+                else:
+                    self._agents[e.agent_id].balance = max(
+                        0.0, self._agents[e.agent_id].balance - p.get("cost", 0.0))
+
+        elif et == EventType.STOCK_SOLD:
+            if e.agent_id in self._agents:
+                if "balance" in p:
+                    self._agents[e.agent_id].balance = p["balance"]
+                else:
+                    self._agents[e.agent_id].balance += p.get("proceeds", 0.0)
+
+        elif et == EventType.STOCK_DIVIDEND:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance += p.get("dividend", 0.0)
+
     # ── スナップショット作成 ─────────────────────────────────────
     def _snapshot(self, tick: int) -> WorldSnapshot:
         import copy

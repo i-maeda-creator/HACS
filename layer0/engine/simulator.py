@@ -63,6 +63,35 @@ class Simulator:
         # 逮捕統計
         self._arrest_count: int = 0
         self._total_seized: float = 0.0
+        # ── 感情・暴動 ────────────────────────────────────────────────
+        self._riot_ticks: int = 0
+        # ── 死と転生 ─────────────────────────────────────────────────
+        self._zero_energy_ticks: Dict[str, int] = {}
+        self._reincarnation_count: int = 0
+        # ── カルト ───────────────────────────────────────────────────
+        self._cults: Dict[str, set] = {}       # cult_id → agent_id集合
+        self._cult_counter: int = 0
+        # ── 影の市場 ─────────────────────────────────────────────────
+        self._shadow_sat: Dict[str, str] = {}  # agent_id → task_id（今tickはスキップ）
+        self._shadow_deal_count: int = 0
+        # ── 特性進化 ─────────────────────────────────────────────────
+        self._trait_wins: Dict[str, int] = {}
+        self._trait_bids: Dict[str, int] = {}
+        self._trait_balance_snap: Dict[str, float] = {}
+        # ── 銀行 ─────────────────────────────────────────────────────
+        self._bank_deposits: Dict[str, float] = {}
+        self._bank_loans: Dict[str, dict] = {}
+        self._bank_reserves: float = 200.0
+        self._bank_interest_rate: float = 0.015
+        # ── 株式市場 ─────────────────────────────────────────────────
+        self._stocks: Dict[str, dict] = {
+            "ARCH": {"price": 10.0, "volatility": 0.08},
+            "TRAD": {"price": 10.0, "volatility": 0.12},
+            "WORK": {"price": 10.0, "volatility": 0.06},
+        }
+        self._portfolios: Dict[str, Dict[str, int]] = {}
+        self._next_stock_event: int = self.rng.randint(15, 35)
+        self._dividend_countdown: int = 30
 
     def add_agent(self, agent: Agent) -> None:
         idx = self._role_counts.get(agent.role, 0)
@@ -135,6 +164,8 @@ class Simulator:
 
     def step(self) -> StateSnapshot:
         self.tick += 1
+        # 影の市場バッファリセット（新 tick）
+        self._shadow_sat.clear()
         # 逮捕期間終了エージェントを釈放
         self._release_arrested()
         # 40% の確率でスポーン（うち MICRO はエージェント近傍）
@@ -175,6 +206,8 @@ class Simulator:
         self._run_ai()
         # Governor policy proposals
         self._run_governor_proposals()
+        # 影の市場（入札前に賄賂）
+        self._run_shadow_deals()
         self._run_auctions()
         self._run_illegal_auctions()
         self._run_koan_targeting()
@@ -182,6 +215,12 @@ class Simulator:
         self._work_agents()
         self._process_illegal_completions()
         self._charge_agents()
+        # 感情・暴動
+        self._update_emotions()
+        # 死と転生
+        self._check_deaths()
+        # カルト
+        self._update_cult()
         # Medic 治療サービス
         self._heal_agents()
         # Memory Market（Trader による記憶売買）
@@ -199,6 +238,12 @@ class Simulator:
         self._pay_patrol_salary()
         # 建物収入（Architect — 累進課税 + 減価償却）
         self._collect_building_income()
+        # 銀行・株式市場
+        self._run_bank()
+        self._run_stock_market()
+        # 特性進化（25tick毎）
+        if self.tick % 25 == 0:
+            self._evolve_traits()
         # 記憶ブーストのカウントダウン
         for agent in self.agents:
             if agent.memory_boost > 0:
@@ -534,8 +579,8 @@ class Simulator:
         self._chrono_count += 1
         # ランダムな出現位置
         for _ in range(30):
-            cx = self.rng.randint(2, 17)
-            cy = self.rng.randint(2, 17)
+            cx = self.rng.randint(2, self.world.width - 3)
+            cy = self.rng.randint(2, self.world.height - 3)
             if self.world.is_passable(cx, cy):
                 break
         from layer0.core.ai import WorkerAI, WorkerTrait
@@ -640,6 +685,9 @@ class Simulator:
             for agent in self.agents:
                 if agent.arrested_until is not None and self.tick <= agent.arrested_until:
                     continue  # 逮捕中は入札不可
+                # 影の市場：このtickこのタスクへの入札を放棄済み
+                if self._shadow_sat.get(agent.agent_id) == task.task_id:
+                    continue
                 # IDLE エージェントに加え、巡回中（MOVING かつ未アサイン）も入札可
                 can_bid = (agent.status == AgentStatus.IDLE or
                            (agent.status == AgentStatus.MOVING and agent.assigned_task_id is None))
@@ -660,8 +708,25 @@ class Simulator:
                     if (isinstance(ai, WorkerAI) and ai.trait == WorkerTrait.CHRONO
                             and self._chrono_suspicion.get(agent.agent_id, 0.0) > 8.0):
                         bid_amount *= self.rng.uniform(0.50, 0.80)
+                    # ライバルが入札中なら対抗して10%増し
+                    if agent.rival_id:
+                        rival = self._get_agent(agent.rival_id)
+                        if rival and (rival.status == AgentStatus.IDLE or
+                                      (rival.status == AgentStatus.MOVING and rival.assigned_task_id is None)):
+                            bid_amount *= 1.10
+                    # カルト内では同士を押し上げるため自分が少し引き下げる
+                    if agent.cult_id and agent.cult_id in self._cults:
+                        cult_members = self._cults[agent.cult_id]
+                        has_cult_rival = any(
+                            mid in cult_members and mid != agent.agent_id
+                            for mid in cult_members
+                        )
+                        if has_cult_rival and self.rng.random() < 0.25:
+                            bid_amount *= 0.85
                     bid = round(bid_amount, 1)
                     task.submit_bid(agent.agent_id, bid)
+                    # 特性進化統計
+                    self._trait_bids[agent.agent_id] = self._trait_bids.get(agent.agent_id, 0) + 1
                     self._emit(EventType.BID_SUBMITTED, agent_id=agent.agent_id, task_id=task.task_id,
                                data={"bid": bid, "task_type": task.task_type.value})
             winner_id = task.resolve_auction(rng=self.rng)
@@ -680,6 +745,8 @@ class Simulator:
                     if isinstance(w_ai, WorkerAI) and w_ai.trait == WorkerTrait.CHRONO:
                         self._chrono_suspicion[winner_id] = (
                             self._chrono_suspicion.get(winner_id, 0.0) + 2.5)
+                    # 特性進化統計
+                    self._trait_wins[winner_id] = self._trait_wins.get(winner_id, 0) + 1
                     self._emit(EventType.TASK_ASSIGNED, agent_id=winner_id, task_id=task.task_id,
                                data={"target_x": task.x, "target_y": task.y, "bid": winning_bid,
                                      "win_prob": win_prob, "num_bidders": len(task.bids)})
@@ -702,23 +769,26 @@ class Simulator:
         from layer0.core.ai import WorkerAI, WorkerTrait
         # HACK は人が集まる場所（中央）、SMUGGLE は外周付近
         task_type = self.rng.choice([TaskType.SMUGGLE, TaskType.HACK])
+        w_max = self.world.width - 2
+        h_max = self.world.height - 2
         if task_type == TaskType.HACK:
             # エージェントが多い場所の近く（攻撃対象が必要）
             if not self.agents:
                 return
             ref = self.rng.choice(self.agents)
             for _ in range(20):
-                x = max(1, min(18, ref.x + self.rng.randint(-3, 3)))
-                y = max(1, min(18, ref.y + self.rng.randint(-3, 3)))
+                x = max(1, min(w_max, ref.x + self.rng.randint(-3, 3)))
+                y = max(1, min(h_max, ref.y + self.rng.randint(-3, 3)))
                 if self.world.is_passable(x, y):
                     break
             else:
                 x, y = ref.x, ref.y
         else:
             # 外周付近の暗がりにスポーン
+            edge = max(4, w_max // 5)
             for _ in range(30):
-                x = self.rng.choice([self.rng.randint(1, 4), self.rng.randint(15, 18)])
-                y = self.rng.randint(1, 18)
+                x = self.rng.choice([self.rng.randint(1, edge), self.rng.randint(w_max - edge, w_max)])
+                y = self.rng.randint(1, h_max)
                 if self.world.is_passable(x, y):
                     break
             else:
@@ -911,6 +981,458 @@ class Simulator:
             if agent.arrested_until is not None and self.tick > agent.arrested_until:
                 agent.arrested_until = None
 
+    # ── 影の市場 ────────────────────────────────────────────────────────
+    def _run_shadow_deals(self) -> None:
+        """Worker が他のWorkerに賄賂を渡して特定タスクへの入札を降ろす（15% 確率/tick）。
+        Observer INFORMANT が近くにいると証拠を蓄積。"""
+        from layer0.core.ai import WorkerAI, WorkerTrait
+        open_tasks = [t for t in self.tasks
+                      if t.status == TaskStatus.OPEN and not t.is_illegal]
+        if not open_tasks:
+            return
+        for agent in self.agents:
+            if agent.role != AgentRole.WORKER:
+                continue
+            if agent.balance < 15.0:
+                continue
+            if self.rng.random() > 0.15:
+                continue
+            ai = self._ai.get(agent.agent_id)
+            if not isinstance(ai, WorkerAI):
+                continue
+            if ai.trait not in (WorkerTrait.OPPORTUNIST, WorkerTrait.HUSTLER, WorkerTrait.GAMBLER):
+                continue
+            # ターゲットタスクを選ぶ（報酬上位）
+            target_task = max(open_tasks, key=lambda t: t.reward)
+            # 近くにいる競合Workerを賄賂対象に
+            rivals = [a for a in self.agents
+                      if a.role == AgentRole.WORKER
+                      and a.agent_id != agent.agent_id
+                      and a.agent_id not in self._koan_agents
+                      and abs(a.x - agent.x) + abs(a.y - agent.y) <= 4]
+            if not rivals:
+                continue
+            bribe_target = self.rng.choice(rivals)
+            bribe_amount = round(self.rng.uniform(3.0, 8.0), 1)
+            if agent.balance < bribe_amount:
+                continue
+            agent.balance -= bribe_amount
+            bribe_target.balance += bribe_amount
+            self._shadow_sat[bribe_target.agent_id] = target_task.task_id
+            self._shadow_deal_count += 1
+            self._emit(EventType.SHADOW_DEAL, agent_id=agent.agent_id,
+                       data={"target_id": bribe_target.agent_id,
+                             "task_id": target_task.task_id,
+                             "bribe": bribe_amount})
+            # Observer INFORMANT が近くにいると公安証拠として記録
+            for obs in self.agents:
+                if obs.role != AgentRole.OBSERVER:
+                    continue
+                from layer0.core.ai import ObserverAI, ObserverPersonality
+                obs_ai = self._ai.get(obs.agent_id)
+                if (isinstance(obs_ai, ObserverAI)
+                        and obs_ai.personality == ObserverPersonality.INFORMANT
+                        and abs(obs.x - agent.x) + abs(obs.y - agent.y) <= 3):
+                    self._koan_evidence[agent.agent_id] = (
+                        self._koan_evidence.get(agent.agent_id, 0.0) + 3.0)
+            break  # 1tickに1エージェントのみ
+
+    # ── 感情・暴動 ─────────────────────────────────────────────────────
+    def _update_emotions(self) -> None:
+        """感情の伝染と自然減衰。エネルギー低下・逮捕でネガティブ化。"""
+        for agent in self.agents:
+            # 自然減衰（中立に戻る）
+            if agent.emotion_level > 0:
+                agent.emotion_level = max(0.0, agent.emotion_level - 0.3)
+            elif agent.emotion_level < 0:
+                agent.emotion_level = min(0.0, agent.emotion_level + 0.2)
+            # エネルギー低下で不安
+            if agent.energy < 20.0:
+                agent.emotion_level = max(-10.0, agent.emotion_level - 0.8)
+            # 残高低下で不安
+            if agent.balance < 10.0:
+                agent.emotion_level = max(-10.0, agent.emotion_level - 0.5)
+            # 逮捕中は怒り
+            if agent.arrested_until is not None and self.tick <= agent.arrested_until:
+                agent.emotion_level = max(-10.0, agent.emotion_level - 1.5)
+        # 感情伝染（半径2以内のエージェント同士で伝播）
+        for agent in self.agents:
+            neighbors = [a for a in self.agents
+                         if a.agent_id != agent.agent_id
+                         and abs(a.x - agent.x) + abs(a.y - agent.y) <= 2]
+            if not neighbors:
+                continue
+            avg_neighbor = sum(n.emotion_level for n in neighbors) / len(neighbors)
+            diff = avg_neighbor - agent.emotion_level
+            agent.emotion_level = round(
+                max(-10.0, min(10.0, agent.emotion_level + diff * 0.15)), 2)
+        # 暴動チェック
+        workers = [a for a in self.agents if a.role == AgentRole.WORKER]
+        if not workers:
+            return
+        angry = [w for w in workers if w.emotion_level < -5.0]
+        if len(angry) / len(workers) >= 0.35:
+            self._trigger_riot(angry)
+
+    def _trigger_riot(self, rioters: list) -> None:
+        """暴動: 怒ったWorkerが建物を破壊し、近くのエージェントのECを奪う。"""
+        self._riot_ticks += 1
+        damage_done = 0
+        for rioter in rioters[:5]:  # 最大5体まで行動
+            # 近くの建物を破壊
+            for pos in list(self._buildings.keys()):
+                bx, by = pos
+                if abs(bx - rioter.x) + abs(by - rioter.y) <= 3:
+                    del self._buildings[pos]
+                    damage_done += 1
+                    break
+            # 近くのエージェントからEC略奪
+            victims = [a for a in self.agents
+                       if a.agent_id != rioter.agent_id
+                       and a.agent_id not in self._koan_agents
+                       and abs(a.x - rioter.x) + abs(a.y - rioter.y) <= 2]
+            if victims:
+                v = self.rng.choice(victims)
+                loot = round(min(v.balance, self.rng.uniform(2.0, 8.0)), 1)
+                v.balance = max(0.0, v.balance - loot)
+                rioter.balance += loot
+            rioter.emotion_level = min(10.0, rioter.emotion_level + 3.0)  # 発散でちょっとスッキリ
+        self._emit(EventType.EMOTION_RIOT,
+                   data={"rioters": len(rioters),
+                         "buildings_destroyed": damage_done,
+                         "riot_count": self._riot_ticks})
+
+    # ── 死と転生 ──────────────────────────────────────────────────────
+    def _check_deaths(self) -> None:
+        """エネルギーが0になったエージェントを追跡。3tick継続で死亡→転生。"""
+        dead = []
+        for agent in self.agents:
+            if agent.energy <= 0.0:
+                self._zero_energy_ticks[agent.agent_id] = (
+                    self._zero_energy_ticks.get(agent.agent_id, 0) + 1)
+                if self._zero_energy_ticks[agent.agent_id] >= 3:
+                    dead.append(agent)
+            else:
+                self._zero_energy_ticks.pop(agent.agent_id, None)
+        for agent in dead:
+            self._reincarnate(agent)
+
+    def _reincarnate(self, agent: "Agent") -> None:  # type: ignore[name-defined]
+        """エージェントを転生させる: 経験値の半分を継承した新個体として復活。"""
+        inherited_exp = agent.experience // 2
+        generation = agent.generation + 1
+        self._reincarnation_count += 1
+        # 同位置か近くの通行可能セルに復活
+        for _ in range(20):
+            rx = max(1, min(self.world.width - 2,
+                            agent.x + self.rng.randint(-3, 3)))
+            ry = max(1, min(self.world.height - 2,
+                            agent.y + self.rng.randint(-3, 3)))
+            if self.world.is_passable(rx, ry):
+                break
+        else:
+            rx, ry = agent.x, agent.y
+        self._emit(EventType.AGENT_DIED, agent_id=agent.agent_id,
+                   data={"experience": agent.experience, "generation": agent.generation,
+                         "balance_left": round(agent.balance, 1)})
+        # 遺産を近隣に分配
+        if agent.balance > 0:
+            legacy_share = round(agent.balance * 0.3, 1)
+            nearby = sorted(
+                [a for a in self.agents if a.agent_id != agent.agent_id],
+                key=lambda a: abs(a.x - agent.x) + abs(a.y - agent.y)
+            )[:3]
+            share = round(legacy_share / max(len(nearby), 1), 1) if nearby else 0.0
+            for n in nearby:
+                n.balance += share
+        # 既存エージェントを刷新（転生）
+        agent.x = rx
+        agent.y = ry
+        agent.energy = 60.0
+        agent.balance = 20.0
+        agent.experience = inherited_exp
+        agent.generation = generation
+        agent.status = AgentStatus.IDLE
+        agent.assigned_task_id = None
+        agent.target_x = None
+        agent.target_y = None
+        agent.emotion_level = 0.0
+        agent.arrested_until = None
+        self._zero_energy_ticks.pop(agent.agent_id, None)
+        self._temporal_loans.pop(agent.agent_id, None)
+        self._emit(EventType.AGENT_REBORN, agent_id=agent.agent_id,
+                   data={"x": rx, "y": ry, "generation": generation,
+                         "inherited_exp": inherited_exp,
+                         "reincarnation_count": self._reincarnation_count})
+
+    # ── カルト ────────────────────────────────────────────────────────
+    def _update_cult(self) -> None:
+        """CHRONO到来やParadox目撃者がカルトを形成・拡大する。"""
+        # CHRONO到来イベントの目撃者をカルト候補に
+        recent_chrono = [e for e in self.event_log
+                         if e.tick == self.tick
+                         and e.event_type in (EventType.CHRONO_ARRIVAL, EventType.PARADOX_COLLAPSE)]
+        for event in recent_chrono:
+            ex = event.payload.get("x", 10)
+            ey = event.payload.get("y", 10)
+            witnesses = [a for a in self.agents
+                         if a.role == AgentRole.WORKER
+                         and a.cult_id is None
+                         and abs(a.x - ex) + abs(a.y - ey) <= 5]
+            if len(witnesses) >= 2 and self.rng.random() < 0.40:
+                # 新カルト結成
+                self._cult_counter += 1
+                cid = f"CULT{self._cult_counter}"
+                self._cults[cid] = set()
+                leader = self.rng.choice(witnesses)
+                for w in witnesses[:3]:
+                    w.cult_id = cid
+                    self._cults[cid].add(w.agent_id)
+                    self._emit(EventType.CULT_JOINED, agent_id=w.agent_id,
+                               data={"cult_id": cid, "leader": leader.agent_id,
+                                     "size": len(self._cults[cid])})
+        # カルト崩壊チェック（公安が複数メンバーを逮捕 → 解散）
+        for cid in list(self._cults.keys()):
+            members = self._cults[cid]
+            alive = [mid for mid in members
+                     if self._get_agent(mid) is not None]
+            arrested = [mid for mid in alive
+                        if (ag := self._get_agent(mid)) and
+                        ag.arrested_until is not None and self.tick <= ag.arrested_until]
+            if len(alive) < 2 or len(arrested) >= 2:
+                for mid in alive:
+                    ag = self._get_agent(mid)
+                    if ag:
+                        ag.cult_id = None
+                del self._cults[cid]
+                self._emit(EventType.CULT_BUSTED,
+                           data={"cult_id": cid,
+                                 "reason": "arrested" if arrested else "disbanded"})
+            else:
+                self._cults[cid] = set(alive)
+
+    # ── 特性進化 ───────────────────────────────────────────────────────
+    TRAIT_DRIFT = {
+        "gambler":     "nihilist",
+        "nihilist":    "drifter",
+        "rebel":       "drifter",
+        "specialist":  "hustler",
+        "conformist":  "saver",
+        "opportunist": "explorer",
+        "explorer":    "hustler",
+        "hustler":     "opportunist",
+        "saver":       "saver",
+        "drifter":     "drifter",
+        "chrono":      "chrono",
+    }
+
+    def _evolve_traits(self) -> None:
+        """25tick毎に実行: 成績不振のWorkerの特性を漂流させる。"""
+        from layer0.core.ai import WorkerAI, WorkerTrait
+        for agent in self.agents:
+            if agent.role != AgentRole.WORKER:
+                continue
+            ai = self._ai.get(agent.agent_id)
+            if not isinstance(ai, WorkerAI):
+                continue
+            if ai.trait == WorkerTrait.CHRONO:
+                continue
+            wins = self._trait_wins.get(agent.agent_id, 0)
+            bids = self._trait_bids.get(agent.agent_id, 0)
+            old_balance = self._trait_balance_snap.get(agent.agent_id, agent.balance)
+            balance_delta = agent.balance - old_balance
+            # 成績不振判定: 落札率低い or 残高減少
+            win_rate = wins / max(bids, 1)
+            if win_rate < 0.15 or balance_delta < -10.0:
+                old_trait = ai.trait.value
+                new_val = self.TRAIT_DRIFT.get(old_trait, old_trait)
+                if new_val != old_trait:
+                    ai.trait = WorkerTrait(new_val)
+                    self._emit(EventType.TRAIT_EVOLVED, agent_id=agent.agent_id,
+                               data={"from": old_trait, "to": new_val,
+                                     "win_rate": round(win_rate, 2),
+                                     "balance_delta": round(balance_delta, 1)})
+            # スナップショット更新
+            self._trait_wins[agent.agent_id] = 0
+            self._trait_bids[agent.agent_id] = 0
+            self._trait_balance_snap[agent.agent_id] = agent.balance
+
+    # ── 銀行 ─────────────────────────────────────────────────────────
+    BANK_LOAN_RATE    = 1.30  # 元本の130%を返済
+    BANK_LOAN_TICKS   = 20   # 返済期限
+    BANK_MIN_BALANCE  = 5.0  # 最低残高以上あれば預金
+
+    def _run_bank(self) -> None:
+        """銀行システム: 預金利息・融資・返済・デフォルト処理。"""
+        # 預金利息（1.5%/tick）
+        for agent in self.agents:
+            dep = self._bank_deposits.get(agent.agent_id, 0.0)
+            if dep > 0:
+                interest = round(dep * self._bank_interest_rate, 2)
+                agent.balance += interest
+                self._bank_deposits[agent.agent_id] += interest
+                self._bank_reserves += interest * 0.5  # 準備金へ半分
+                self._emit(EventType.BANK_INTEREST, agent_id=agent.agent_id,
+                           data={"interest": interest, "deposit": round(dep, 2)})
+
+        # 預金勧誘（残高が高いWorker/Traderが自動預金）
+        for agent in self.agents:
+            if agent.agent_id in self._bank_deposits:
+                continue
+            if agent.agent_id in self._bank_loans:
+                continue
+            if agent.balance >= 60.0 and self.rng.random() < 0.08:
+                deposit_amount = round(agent.balance * 0.3, 1)
+                agent.balance -= deposit_amount
+                self._bank_deposits[agent.agent_id] = deposit_amount
+                self._bank_reserves += deposit_amount * 0.1
+                self._emit(EventType.BANK_DEPOSIT, agent_id=agent.agent_id,
+                           data={"amount": deposit_amount,
+                                 "balance": round(agent.balance, 1)})
+
+        # 引き出し（預金が高い & 残高が低い場合）
+        for agent in self.agents:
+            dep = self._bank_deposits.get(agent.agent_id, 0.0)
+            if dep > 0 and agent.balance < 15.0:
+                withdraw = min(dep, round(dep * 0.5, 1))
+                agent.balance += withdraw
+                self._bank_deposits[agent.agent_id] -= withdraw
+                if self._bank_deposits[agent.agent_id] < 0.1:
+                    del self._bank_deposits[agent.agent_id]
+                self._emit(EventType.BANK_WITHDRAW, agent_id=agent.agent_id,
+                           data={"amount": withdraw,
+                                 "balance": round(agent.balance, 1)})
+
+        # 融資（残高低い & 預金なし & 融資なし）
+        for agent in self.agents:
+            if agent.agent_id in self._bank_loans:
+                continue
+            if agent.agent_id in self._bank_deposits:
+                continue
+            if agent.balance < 10.0 and self._bank_reserves > 20.0 and self.rng.random() < 0.10:
+                loan_amount = round(self.rng.uniform(10.0, 25.0), 1)
+                due = self.tick + self.BANK_LOAN_TICKS
+                agent.balance += loan_amount
+                self._bank_reserves -= loan_amount
+                self._bank_loans[agent.agent_id] = {
+                    "amount_due": round(loan_amount * self.BANK_LOAN_RATE, 1),
+                    "due_tick": due,
+                }
+                self._emit(EventType.BANK_LOAN, agent_id=agent.agent_id,
+                           data={"amount": loan_amount,
+                                 "amount_due": round(loan_amount * self.BANK_LOAN_RATE, 1),
+                                 "due_tick": due})
+
+        # 返済処理
+        due = [aid for aid, loan in self._bank_loans.items()
+               if self.tick >= loan["due_tick"]]
+        for aid in due:
+            loan = self._bank_loans.pop(aid)
+            agent = self._get_agent(aid)
+            if agent is None:
+                continue
+            if agent.balance >= loan["amount_due"]:
+                agent.balance -= loan["amount_due"]
+                self._bank_reserves += loan["amount_due"]
+                self._emit(EventType.BANK_REPAYMENT, agent_id=aid,
+                           data={"repaid": loan["amount_due"],
+                                 "balance": round(agent.balance, 1)})
+            else:
+                # デフォルト: 残高を全額没収してペナルティ
+                seized = agent.balance
+                self._bank_reserves += seized
+                agent.balance = 0.0
+                agent.emotion_level = max(-10.0, agent.emotion_level - 3.0)
+                self._emit(EventType.BANK_DEFAULT, agent_id=aid,
+                           data={"seized": seized,
+                                 "amount_due": loan["amount_due"]})
+
+    # ── 株式市場 ──────────────────────────────────────────────────────
+    STOCK_MAX_SHARES = 50  # 1エージェントが保有できる最大株数
+
+    def _run_stock_market(self) -> None:
+        """株式市場: ARCH/TRAD/WORK の3銘柄。イベント連動価格変動・配当・クラッシュ。"""
+        # 価格変動（毎tick）
+        for ticker, data in self._stocks.items():
+            vol = data["volatility"]
+            drift = self.rng.gauss(0, vol)
+            data["price"] = round(max(1.0, data["price"] * (1 + drift)), 2)
+
+        # イベント連動価格変動
+        if self.tick >= self._next_stock_event:
+            self._next_stock_event = self.tick + self.rng.randint(20, 50)
+            ticker = self.rng.choice(list(self._stocks.keys()))
+            move = self.rng.uniform(-0.25, 0.35)
+            self._stocks[ticker]["price"] = round(
+                max(1.0, self._stocks[ticker]["price"] * (1 + move)), 2)
+
+        # クラッシュ判定（いずれかの銘柄が初期値40%以下）
+        for ticker, data in self._stocks.items():
+            if data["price"] <= 4.0:
+                self._emit(EventType.MARKET_CRASH,
+                           data={"ticker": ticker, "price": data["price"]})
+                data["price"] = 6.0  # 下限リセット
+
+        # 自動売買（残高が高い Trader/Architect が小口購入）
+        for agent in self.agents:
+            if agent.role not in (AgentRole.TRADER, AgentRole.ARCHITECT):
+                continue
+            if agent.balance < 20.0 or self.rng.random() > 0.10:
+                continue
+            ticker = self.rng.choice(list(self._stocks.keys()))
+            price = self._stocks[ticker]["price"]
+            if agent.balance >= price:
+                shares = min(self.STOCK_MAX_SHARES,
+                             int(agent.balance * 0.15 / price))
+                if shares < 1:
+                    continue
+                cost = round(shares * price, 2)
+                agent.balance -= cost
+                port = self._portfolios.setdefault(agent.agent_id, {})
+                port[ticker] = port.get(ticker, 0) + shares
+                self._emit(EventType.STOCK_BOUGHT, agent_id=agent.agent_id,
+                           data={"ticker": ticker, "shares": shares, "price": price,
+                                 "cost": cost, "balance": round(agent.balance, 1)})
+
+        # 自動売却（残高が低い場合に株を売る）
+        for agent in self.agents:
+            if agent.balance > 15.0:
+                continue
+            port = self._portfolios.get(agent.agent_id)
+            if not port:
+                continue
+            ticker = next(iter(port))
+            shares_held = port[ticker]
+            sell = max(1, shares_held // 2)
+            price = self._stocks[ticker]["price"]
+            proceeds = round(sell * price, 2)
+            agent.balance += proceeds
+            port[ticker] -= sell
+            if port[ticker] <= 0:
+                del port[ticker]
+            self._emit(EventType.STOCK_SOLD, agent_id=agent.agent_id,
+                       data={"ticker": ticker, "shares": sell, "price": price,
+                             "proceeds": proceeds, "balance": round(agent.balance, 1)})
+
+        # 配当（30tick毎）
+        self._dividend_countdown -= 1
+        if self._dividend_countdown <= 0:
+            self._dividend_countdown = 30
+            for agent_id, port in self._portfolios.items():
+                agent = self._get_agent(agent_id)
+                if not agent:
+                    continue
+                total_div = 0.0
+                for ticker, shares in port.items():
+                    div_per_share = round(self._stocks[ticker]["price"] * 0.03, 3)
+                    total_div += shares * div_per_share
+                total_div = round(total_div, 2)
+                if total_div > 0:
+                    agent.balance += total_div
+                    self._emit(EventType.STOCK_DIVIDEND, agent_id=agent_id,
+                               data={"dividend": total_div,
+                                     "portfolio": dict(port)})
+
     def _update_chrono_suspicion(self) -> None:
         """CHRONO エージェントの正体発覚疑惑度を更新。Guardian 近接・連勝で上昇、自然減衰。"""
         from layer0.core.ai import WorkerAI, WorkerTrait, GuardianAI, GuardianPersonality
@@ -1041,8 +1563,16 @@ class Simulator:
                                  "buildings_total": len(self._buildings)})
             # 経験値加算（記憶資本）
             agent.experience += 1
+            # 同盟相手にボーナスの5%をシェア
+            if agent.ally_id:
+                ally = self._get_agent(agent.ally_id)
+                if ally and net > 0:
+                    ally_share = round(net * 0.05, 2)
+                    ally.balance += ally_share
             self._emit(EventType.TASK_COMPLETED, agent_id=agent.agent_id, task_id=task.task_id,
                        data={"reward": net, "energy": round(agent.energy, 1), "balance": round(agent.balance, 1)})
+            # 感情: タスク完了で少し幸福
+            agent.emotion_level = min(10.0, agent.emotion_level + 1.0)
             # 因果ループ: タスク完了が過去に干渉し同種タスクを引き寄せる（10%）
             if self.rng.random() < 0.10:
                 loop_task = self.spawn_task(task_type=task.task_type)
