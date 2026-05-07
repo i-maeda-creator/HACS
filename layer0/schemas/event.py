@@ -20,6 +20,9 @@ class EventType(str, Enum):
     COMMAND_ISSUED        = "CommandIssued"
     SAFETY_TRIGGERED      = "SafetyTriggered"
     NETWORK_EVENT         = "NetworkEvent"
+    VOTE_SUBMITTED        = "VoteSubmitted"   # Governor が投票を提出
+    VOTE_PASSED           = "VotePassed"      # 過半数合意 → 政策発動
+    MARKET_EVENT          = "MarketEvent"     # 市場Boom/Crash
 
 
 # EventType → MQTT トピックのマッピング
@@ -37,6 +40,9 @@ MQTT_TOPIC: Dict[str, str] = {
     EventType.COMMAND_ISSUED:       "city/command",
     EventType.SAFETY_TRIGGERED:     "safety/alert",
     EventType.NETWORK_EVENT:        "network/health",
+    EventType.VOTE_SUBMITTED:       "city/governance/vote",
+    EventType.VOTE_PASSED:          "city/governance/policy",
+    EventType.MARKET_EVENT:         "city/market/event",
 }
 
 

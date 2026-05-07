@@ -30,12 +30,18 @@ class Simulator:
         self._role_counts: Dict[AgentRole, int] = {}
         self.event_log: List[Event] = []
         self.snapshots: List[StateSnapshot] = []
-        # 動的ポリシーパラメータ — Governor 提案で変動し tick ごとに自然減衰
+        # 動的ポリシーパラメータ — Governor 投票で変動し tick ごとに自然減衰
         self.policy_params: Dict[str, float] = {
             "reward_multiplier": 1.0,   # タスクスポーン時の報酬倍率
             "tax_rate":          Economy.TAX_RATE,  # 動的税率
             "worker_bid_bonus":  0.0,   # Worker 全員の入札額ボーナス
         }
+        # 投票バッファ: action -> List[governor_id]（同一 tick 内の票を集計）
+        self._vote_buffer: Dict[str, List[str]] = {}
+        # 市場イベント管理
+        self._market_event: Optional[Dict] = None   # 発動中のイベント
+        self._market_event_end: int = 0
+        self._next_market_event: int = self.rng.randint(30, 60)
 
     def add_agent(self, agent: Agent) -> None:
         idx = self._role_counts.get(agent.role, 0)
@@ -65,6 +71,10 @@ class Simulator:
         pp["reward_multiplier"] = max(1.0, pp["reward_multiplier"] - 0.008)
         pp["tax_rate"]          = max(Economy.TAX_RATE, pp["tax_rate"] - 0.001)
         pp["worker_bid_bonus"]  = max(0.0, pp["worker_bid_bonus"] - 0.06)
+        # 市場イベント
+        self._tick_market_events()
+        # 投票バッファリセット（新 tick）
+        self._vote_buffer.clear()
         # Safety first
         safety_events = self.safety.check(self.agents, self.tick)
         for e in safety_events:
@@ -111,6 +121,7 @@ class Simulator:
         else:
             worker_idle_ratio = 0.0
 
+        # 各 Governor が投票を提出（直接決定ではなく投票）
         for agent in self.agents:
             if agent.role != AgentRole.GOVERNOR:
                 continue
@@ -119,20 +130,70 @@ class Simulator:
                 continue
             proposal = ai.policy_proposal(self.tick, gini, completion, worker_idle_ratio)
             if proposal:
-                self._apply_policy(proposal)
-                self._emit(EventType.POLICY_CHANGED, agent_id=agent.agent_id,
-                           data={"proposal": proposal, "source": "governor",
+                action = proposal["action"]
+                self._vote_buffer.setdefault(action, []).append(agent.agent_id)
+                self._emit(EventType.VOTE_SUBMITTED, agent_id=agent.agent_id,
+                           data={"action": action, "reason": proposal.get("reason", ""),
+                                 "gini": round(gini, 3), "completion": round(completion, 3)})
+
+        # 過半数合意 → 政策発動（合意ボーナスあり）
+        num_governors = sum(1 for a in self.agents if a.role == AgentRole.GOVERNOR)
+        majority = max(1, (num_governors + 1) // 2)
+        for action, voters in self._vote_buffer.items():
+            if len(voters) >= majority:
+                consensus_factor = 1.5 if len(voters) >= num_governors else 1.0
+                self._apply_policy({"action": action}, factor=consensus_factor)
+                self._emit(EventType.VOTE_PASSED,
+                           data={"action": action, "voters": voters,
+                                 "consensus_factor": consensus_factor,
                                  "params_after": dict(self.policy_params)})
 
-    def _apply_policy(self, proposal: Dict) -> None:
+    def _apply_policy(self, proposal: Dict, factor: float = 1.0) -> None:
         action = proposal.get("action")
         pp = self.policy_params
         if action == "worker_support":
-            pp["worker_bid_bonus"] = min(4.0, pp["worker_bid_bonus"] + 1.5)
+            pp["worker_bid_bonus"] = min(4.0, pp["worker_bid_bonus"] + 1.5 * factor)
         elif action == "tax_increase":
-            pp["tax_rate"] = min(0.25, pp["tax_rate"] + 0.02)
+            pp["tax_rate"] = min(0.25, pp["tax_rate"] + 0.02 * factor)
         elif action == "reward_boost":
-            pp["reward_multiplier"] = min(1.6, pp["reward_multiplier"] + 0.12)
+            pp["reward_multiplier"] = min(1.6, pp["reward_multiplier"] + 0.12 * factor)
+
+    def _tick_market_events(self) -> None:
+        """市場イベント（Boom / Crash）の発火・終了管理。"""
+        # 終了チェック
+        if self._market_event and self.tick >= self._market_event_end:
+            self._revert_market_event()
+            self._market_event = None
+            self.emit_market(event_name="end", details={})
+
+        # 新規イベント発火
+        if self._market_event is None and self.tick >= self._next_market_event:
+            kind = self.rng.choice(["boom", "crash"])
+            duration = self.rng.randint(8, 15)
+            if kind == "boom":
+                self._market_event = {"kind": "boom",
+                                      "orig_multiplier": self.policy_params["reward_multiplier"]}
+                self.policy_params["reward_multiplier"] = min(2.0,
+                    self.policy_params["reward_multiplier"] + 0.5)
+            else:
+                self._market_event = {"kind": "crash",
+                                      "orig_multiplier": self.policy_params["reward_multiplier"]}
+                self.policy_params["reward_multiplier"] = max(0.4,
+                    self.policy_params["reward_multiplier"] - 0.4)
+            self._market_event_end = self.tick + duration
+            self._next_market_event = self.tick + duration + self.rng.randint(40, 80)
+            self.emit_market(event_name=kind,
+                             details={"duration": duration,
+                                      "reward_multiplier": self.policy_params["reward_multiplier"]})
+
+    def _revert_market_event(self) -> None:
+        if self._market_event:
+            orig = self._market_event.get("orig_multiplier", 1.0)
+            self.policy_params["reward_multiplier"] = orig
+
+    def emit_market(self, event_name: str, details: dict) -> None:
+        self._emit(EventType.MARKET_EVENT,
+                   data={"event": event_name, **details})
 
     def _run_auctions(self) -> None:
         open_tasks = [t for t in self.tasks if t.status == TaskStatus.OPEN]
