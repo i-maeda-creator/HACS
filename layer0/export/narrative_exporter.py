@@ -33,6 +33,8 @@ class NarrativeExporter:
             self._section_economy(),
             self._section_society(),
             self._section_stocks(),
+            self._section_production(),
+            self._section_genius(),
             self._section_obituary(),
             self._footer(),
         ]
@@ -297,6 +299,91 @@ class NarrativeExporter:
                               f"(価格{e.payload.get('price',0):.2f}EC → 強制リセット)")
         if not (buys or sells or dividends or crashes):
             lines.append("  （株式取引なし）")
+        return "\n".join(lines)
+
+    # ── 生産チェーン面 ────────────────────────────────────────────────────
+    def _section_production(self) -> str:
+        lines = [self._section_header("生産チェーン / 都市成長")]
+        gathered  = self._by_type.get(EventType.RESOURCE_GATHERED, [])
+        processed = self._by_type.get(EventType.RESOURCE_PROCESSED, [])
+        upgraded  = self._by_type.get(EventType.BUILDING_UPGRADED, [])
+        spawned   = self._by_type.get(EventType.RESOURCE_SPAWNED, [])
+
+        if spawned:
+            lines.append(f"  リソースノード出現: {len(spawned)}件")
+        if gathered:
+            total_res = sum(e.payload.get("gathered", 0) for e in gathered)
+            lines.append(f"  採集: {len(gathered)}件 / 合計 {total_res}単位")
+        if processed:
+            total_inc = sum(e.payload.get("income", 0) for e in processed)
+            lines.append(f"  加工・売却: {len(processed)}件 / 合計収益 {total_inc:.1f}EC")
+        if upgraded:
+            lines.append(f"  建物レベルアップ: {len(upgraded)}件")
+            for e in upgraded:
+                pos = f"({e.payload.get('x','?')},{e.payload.get('y','?')})"
+                lv  = e.payload.get("level", "?")
+                lines.append(f"    tick{e.tick:3d}: 建物{pos} → Lv{lv}")
+
+        if not (gathered or processed or upgraded):
+            lines.append("  （今号は生産活動なし）")
+        return "\n".join(lines)
+
+    # ── 天才・発明面 ──────────────────────────────────────────────────────
+    def _section_genius(self) -> str:
+        lines = [self._section_header("精神と時の部屋 / 天才発明 / 永久技術")]
+        enters     = self._by_type.get(EventType.CHAMBER_ENTERED, [])
+        exits      = self._by_type.get(EventType.CHAMBER_EXITED, [])
+        geniuses   = self._by_type.get(EventType.GENIUS_EMERGED, [])
+        genesis    = self._by_type.get(EventType.GENESIS_EVENT, [])
+        moves      = self._by_type.get(EventType.CHAMBER_MOVED, [])
+        permanents = self._by_type.get(EventType.INVENTION_PERMANENT, [])
+        combos     = self._by_type.get(EventType.COMBO_EMERGED, [])
+
+        if moves:
+            lines.append(f"  精神と時の部屋: {len(moves)}回移動")
+        if enters:
+            lines.append(f"  入室者: {len(enters)}体")
+        if exits:
+            avg_exp = (sum(e.payload.get("exp_gained", 0) for e in exits) / len(exits)) if exits else 0
+            lines.append(f"  退室者: {len(exits)}体 / 平均経験値獲得 {avg_exp:.0f}")
+
+        if geniuses:
+            lines.append(f"\n  ★ 天才覚醒: {len(geniuses)}体")
+            for e in geniuses:
+                inv_name = e.payload.get("invention_name", "不明")
+                inv_type = e.payload.get("invention_type", "?")
+                exp      = e.payload.get("experience", 0)
+                perm     = e.payload.get("permanent", False)
+                perm_tag = "【永久技術】" if perm else f"（有効期限: tick{e.payload.get('expires_at', '?')}）"
+                lines.append(f"    tick{e.tick:3d}: {e.agent_id} 覚醒（経験値{exp}）{perm_tag}")
+                lines.append(f"           発明: 【{inv_name}】 種別: {inv_type}")
+
+        if permanents:
+            lines.append(f"\n  ◆ 永久技術として刻まれた発明: {len(permanents)}件")
+            for e in permanents:
+                lines.append(f"    tick{e.tick:3d}: 〈{e.payload.get('invention_name', '?')}〉 永久技術化")
+
+        if genesis:
+            lines.append(f"\n  世界改変発明（一時）: {len(genesis)}件")
+            for e in genesis:
+                desc = e.payload.get("description", "")
+                exp_tick = e.payload.get("expires_at", "?")
+                lines.append(f"    〈{e.payload.get('name', '?')}〉 有効期限: tick{exp_tick}")
+                if desc:
+                    lines.append(f"     {desc}")
+
+        if combos:
+            lines.append(f"\n  ✦ コンボ発明（予期せぬ創発）: {len(combos)}件")
+            for e in combos:
+                sources = ", ".join(e.payload.get("source_inventions", []))
+                lines.append(f"    tick{e.tick:3d}: 〈{e.payload.get('name', '?')}〉")
+                lines.append(f"           起源技術: {sources}")
+                desc = e.payload.get("description", "")
+                if desc:
+                    lines.append(f"           {desc[:60]}…")
+
+        if not (enters or geniuses or permanents or combos):
+            lines.append("  （今号は部屋への入室なし）")
         return "\n".join(lines)
 
     # ── 訃報面 ────────────────────────────────────────────────────────────

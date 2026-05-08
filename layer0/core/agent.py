@@ -42,6 +42,9 @@ class Agent:
     ally_id: Optional[str] = None         # 同盟相手のagent_id
     rival_id: Optional[str] = None        # ライバルのagent_id
     cult_id: Optional[str] = None         # 所属カルトID
+    chamber_sessions: int = 0             # 精神と時の部屋への入室回数
+    genius_until: Optional[int] = None    # 天才ステータスの終了tick
+    resources: int = 0                    # 所持リソース数（採集した原材料）
 
     MOVE_COST = 0.5
     WORK_COST = 2.0

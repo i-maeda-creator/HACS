@@ -24,6 +24,9 @@ class TaskType(str, Enum):
     # ── 違法タスク（闇市）─────────────────────────────────────────
     SMUGGLE     = "smuggle"     # 密輸 — 高報酬・無税・発覚すると逮捕リスク
     HACK        = "hack"        # ハッキング — 近隣エージェントのECを直接窃取
+    # ── 生産チェーン ─────────────────────────────────────────────
+    GATHER      = "gather"      # 採集 — リソースノードから原材料を収集
+    UPGRADE     = "upgrade"     # 建物強化 — 建物をL+1にアップグレード
 
 
 # ── タイプ別パラメータ定義 ────────────────────────────────────────────────────
@@ -88,18 +91,31 @@ TASK_PARAMS: Dict[str, dict] = {
         expires_in  =15,
         color       ="#AA0000",
     ),
+    TaskType.GATHER: dict(
+        reward_range=(3.0,   8.0),  # 採集基本報酬（リソース価値が加算）
+        cost_range  =(1.0,   3.0),
+        expires_in  =30,            # ノードが消える前に採集
+        color       ="#76FF03",
+    ),
+    TaskType.UPGRADE: dict(
+        reward_range=(20.0, 60.0),  # 建物レベルで変動
+        cost_range  =(8.0,  15.0),
+        expires_in  =None,
+        color       ="#FFC400",
+    ),
 }
 
 # タイプ別スポーン確率（合計 1.0）
 TASK_TYPE_WEIGHTS = [
-    (TaskType.STANDARD, 0.25),
-    (TaskType.HEAVY,    0.09),
-    (TaskType.URGENT,   0.12),
-    (TaskType.TRADE,    0.14),
-    (TaskType.SECURITY, 0.10),
-    (TaskType.SURVEY,   0.10),
-    (TaskType.MICRO,    0.12),
-    (TaskType.CONSTRUCT,0.08),
+    (TaskType.STANDARD, 0.22),
+    (TaskType.HEAVY,    0.08),
+    (TaskType.URGENT,   0.11),
+    (TaskType.TRADE,    0.12),
+    (TaskType.SECURITY, 0.09),
+    (TaskType.SURVEY,   0.09),
+    (TaskType.MICRO,    0.11),
+    (TaskType.CONSTRUCT,0.10),
+    (TaskType.GATHER,   0.08),
 ]
 
 # 役職ごとの入札ボーナス係数（タスクタイプ別）
@@ -118,6 +134,8 @@ ROLE_TASK_BONUS: Dict[TaskType, Dict[AgentRole, float]] = {
     TaskType.SURVEY:    {AgentRole.WORKER:0.6, AgentRole.TRADER:0.4,   AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:1.5, AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:_Z},
     TaskType.MICRO:     {AgentRole.WORKER:1.0, AgentRole.TRADER:0.5,   AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:_Z,  AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:_Z},
     TaskType.CONSTRUCT: {AgentRole.WORKER:0.6, AgentRole.TRADER:_Z,    AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:_Z,  AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:2.2},
+    TaskType.GATHER:    {AgentRole.WORKER:1.3, AgentRole.TRADER:0.7,   AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:0.8, AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:_Z},
+    TaskType.UPGRADE:   {AgentRole.WORKER:0.8, AgentRole.TRADER:_Z,    AgentRole.GUARDIAN:_Z,  AgentRole.OBSERVER:_Z,  AgentRole.GOVERNOR:_Z, AgentRole.MEDIC:_Z, AgentRole.ARCHITECT:2.0},
 }
 
 

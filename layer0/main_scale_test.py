@@ -399,6 +399,64 @@ def main():
         max_r = max(e.payload.get("dissatisfied_ratio", 0) for e in pressures)
         print(f"  最大弾劾圧力  : {max_p}tick連続  最大不満率: {max_r*100:.1f}%")
 
+    # ── 精神と時の部屋 / 天才発明 ──────────────────────────────────
+    chamber_entered = [e for e in sim.event_log if e.event_type == ET.CHAMBER_ENTERED]
+    chamber_exited  = [e for e in sim.event_log if e.event_type == ET.CHAMBER_EXITED]
+    genius_events   = [e for e in sim.event_log if e.event_type == ET.GENIUS_EMERGED]
+    genesis_events  = [e for e in sim.event_log if e.event_type == ET.GENESIS_EVENT]
+    print(f"\n=== 精神と時の部屋 ===")
+    print(f"  入室: {len(chamber_entered)}件  退室: {len(chamber_exited)}件")
+    print(f"  天才覚醒: {len(genius_events)}体  世界改変発明: {len(genesis_events)}件")
+    if genius_events:
+        for e in genius_events:
+            print(f"    tick{e.tick:3d}: {e.agent_id} 覚醒 — 経験{e.payload.get('experience',0)} "
+                  f"→ 【{e.payload.get('invention_name','?')}】")
+    if genesis_events:
+        for e in genesis_events:
+            print(f"    発明種別: {e.payload.get('type','?')}  "
+                  f"有効期限: tick{e.payload.get('expires_at','?')}")
+    if sim._active_inventions:
+        print(f"  現在アクティブな発明（一時）: {len(sim._active_inventions)}件")
+        for inv in sim._active_inventions:
+            remaining = inv["expires_at"] - sim.tick if inv.get("expires_at") else "∞"
+            print(f"    〈{inv['name']}〉残り{remaining}tick")
+    if sim._permanent_inventions:
+        print(f"  永久技術: {len(sim._permanent_inventions)}件")
+        for inv in sim._permanent_inventions:
+            src = " [COMBO]" if inv.get("inventor") == "COMBO" else ""
+            print(f"    ◆ 〈{inv['name']}〉{src}")
+    print(f"  現在の部屋座標: {sim._chamber_pos}")
+    print(f"  累計天才数: {len(sim._genius_set)}体")
+
+    # ── 生産チェーン ─────────────────────────────────────────────
+    gathered_events  = [e for e in sim.event_log if e.event_type == ET.RESOURCE_GATHERED]
+    processed_events = [e for e in sim.event_log if e.event_type == ET.RESOURCE_PROCESSED]
+    upgraded_events  = [e for e in sim.event_log if e.event_type == ET.BUILDING_UPGRADED]
+    spawned_events   = [e for e in sim.event_log if e.event_type == ET.RESOURCE_SPAWNED]
+    print(f"\n=== 生産チェーン ===")
+    print(f"  リソースノード出現: {len(spawned_events)}件")
+    total_res = sum(e.payload.get("gathered", 0) for e in gathered_events)
+    print(f"  採集: {len(gathered_events)}件  合計 {total_res}単位")
+    total_inc = sum(e.payload.get("income", 0) for e in processed_events)
+    print(f"  加工収益: {len(processed_events)}件  合計 {total_inc:.1f}EC")
+    print(f"  建物レベルアップ: {len(upgraded_events)}件")
+    print(f"  現存建物数: {len(sim._buildings)}棟")
+    if sim._buildings:
+        lv_counts: dict = {}
+        for bdata in sim._buildings.values():
+            lv = bdata.get("level", 1)
+            lv_counts[lv] = lv_counts.get(lv, 0) + 1
+        for lv in sorted(lv_counts):
+            print(f"    Lv{lv}: {lv_counts[lv]}棟")
+
+    combo_events     = [e for e in sim.event_log if e.event_type == ET.COMBO_EMERGED]
+    perm_events      = [e for e in sim.event_log if e.event_type == ET.INVENTION_PERMANENT]
+    if combo_events:
+        print(f"\n  ✦ コンボ発明（創発）: {len(combo_events)}件")
+        for e in combo_events:
+            print(f"    tick{e.tick:3d}: 〈{e.payload.get('name','?')}〉"
+                  f" 種別: {e.payload.get('type','?')}")
+
     # ── 時空歪曲 ────────────────────────────────────────────────
     chrono_arrivals  = [e for e in sim.event_log if e.event_type == ET.CHRONO_ARRIVAL]
     chrono_exposures = [e for e in sim.event_log if e.event_type == ET.TEMPORAL_EXPOSURE]

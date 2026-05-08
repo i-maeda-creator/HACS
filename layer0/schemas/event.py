@@ -75,6 +75,20 @@ class EventType(str, Enum):
     COUP_SUCCEEDED        = "CoupSucceeded"        # クーデター成功 → 反乱政府樹立
     COUP_FAILED           = "CoupFailed"           # クーデター失敗 → 主導者逮捕
     REBEL_RESIGNED        = "RebelResigned"        # 反乱政府の任期終了 → Worker復帰
+    # ── 精神と時の部屋 / 天才発明 ──────────────────────────────────────
+    CHAMBER_MOVED         = "ChamberMoved"         # 部屋が別座標へ移動
+    CHAMBER_DISCOVERED    = "ChamberDiscovered"    # エージェントが部屋を発見
+    CHAMBER_ENTERED       = "ChamberEntered"       # 入室
+    CHAMBER_EXITED        = "ChamberExited"        # 退室（正常）
+    GENIUS_EMERGED        = "GeniusEmerged"        # 天才として覚醒
+    GENESIS_EVENT         = "GenesisEvent"         # 世界唯一の発明が生まれる
+    INVENTION_PERMANENT   = "InventionPermanent"   # 発明が永久技術として刻まれる
+    COMBO_EMERGED         = "ComboEmerged"         # 永久技術の組み合わせから新発明が誕生
+    # ── 生産チェーン ───────────────────────────────────────────────
+    RESOURCE_SPAWNED      = "ResourceSpawned"      # リソースノードが出現
+    RESOURCE_GATHERED     = "ResourceGathered"     # Workerがリソースを採集
+    RESOURCE_PROCESSED    = "ResourceProcessed"    # 建物でリソースを加工・売却
+    BUILDING_UPGRADED     = "BuildingUpgraded"     # 建物がレベルアップ
 
 
 # EventType → MQTT トピックのマッピング

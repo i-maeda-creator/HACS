@@ -250,6 +250,23 @@ class EventReplayer:
                 self._agents[victim_id].balance = max(
                     0.0, self._agents[victim_id].balance - p.get("steal", 0.0))
 
+        elif et == EventType.RESOURCE_GATHERED:
+            # Worker が resources フィールドに採集分を加算（balance に直接影響しない）
+            pass
+
+        elif et == EventType.RESOURCE_PROCESSED:
+            if e.agent_id in self._agents:
+                self._agents[e.agent_id].balance += p.get("income", 0.0)
+
+        elif et == EventType.BUILDING_UPGRADED:
+            pass  # building level 変化は EventReplayer の建物レジストリに非依存
+
+        elif et == EventType.INVENTION_PERMANENT:
+            pass  # 永久発明の登録は Simulator 内状態なのでリプレイ対象外
+
+        elif et == EventType.COMBO_EMERGED:
+            pass  # コンボ発明の登録は Simulator 内状態なのでリプレイ対象外
+
         elif et == EventType.KOAN_ARREST:
             if e.agent_id in self._agents:
                 self._agents[e.agent_id].balance = p.get("balance_after",

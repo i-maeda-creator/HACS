@@ -92,6 +92,21 @@ class Simulator:
         self._portfolios: Dict[str, Dict[str, int]] = {}
         self._next_stock_event: int = self.rng.randint(15, 35)
         self._dividend_countdown: int = 30
+        # ── 精神と時の部屋 ────────────────────────────────────────────
+        self._chamber_pos: Optional[tuple] = None        # (x, y)
+        self._chamber_next_move: int = 1                 # 最初は tick 1 に初期配置
+        self._chamber_agents: Dict[str, int] = {}        # agent_id → 入室tick
+        self._knows_chamber: set = set()                 # 場所を知っているagent_id
+        self._active_inventions: list = []               # アクティブな発明リスト（一時）
+        self._permanent_inventions: list = []            # 永久技術リスト
+        self._genius_set: set = set()                    # 既に天才覚醒したagent_id
+        self._genius_history: list = []                  # 天才・発明の記録
+        self._combo_check_next: int = 100                # 次のコンボチェックtick
+        self._combo_made_types: set = set()              # 作成済みコンボ種別
+        # ── 生産チェーン ──────────────────────────────────────────
+        self._resource_nodes: Dict[tuple, dict] = {}    # (x,y)→{"stock":int,"respawn_at":int}
+        self._next_resource_spawn: int = 10             # 次のノードスポーンtick
+        self._upgrade_cooldown: Dict[tuple, int] = {}   # 建物座標→次UPGRADEタスク解禁tick
         # ── 弾劾・クーデター ──────────────────────────────────────────
         self._impeachment_pressure: Dict[str, int] = {}  # governor_id → 連続不満tick数
         self._impeached_governors: set = set()           # 弾劾済み Governor ID
@@ -249,6 +264,14 @@ class Simulator:
         # 銀行・株式市場
         self._run_bank()
         self._run_stock_market()
+        # 生産チェーン
+        self._run_production_chain()
+        # 精神と時の部屋 + 発明効果
+        self._run_chamber()
+        self._apply_invention_effects()
+        self._decay_inventions()
+        # コンボ発明チェック
+        self._check_combo_inventions()
         # 弾劾・クーデター
         self._run_impeachment_check()
         self._run_coup_check()
@@ -377,6 +400,10 @@ class Simulator:
 
     def _deduct_upkeep(self) -> None:
         cost = Economy.UPKEEP_COST
+        if self._has_active_invention("post_scarcity"):
+            cost = 0.0
+        elif self._has_active_invention("entropy_reversal"):
+            cost *= 3.0
         for agent in self.agents:
             agent.balance = max(0.0, agent.balance - cost)
             self.economy.pay_upkeep(agent.agent_id, self.tick)
@@ -405,31 +432,51 @@ class Simulator:
                 self._emit(EventType.PATROL_SALARY, agent_id=agent.agent_id,
                            data={"salary": salary, "balance": round(agent.balance, 1)})
 
+    # 建物レベル別収入レート（/tick）
+    _BUILDING_INCOME_BY_LEVEL = {1: 0.5, 2: 2.0, 3: 6.0}
+    # UPGRADEタスクのレベル別報酬
+    _UPGRADE_REWARD_BY_LEVEL  = {1: 25.0, 2: 45.0}  # L1→L2 or L2→L3
+
     def _collect_building_income(self) -> None:
-        """建物収入 + 累進資本課税 + 減価償却。
-        - 毎tick 耐久度 -2（50tick で自然崩壊）
-        - 2棟目以降は累進課税（+15%/棟、最大45%）
-        - 余剰税は tax_pool へ還元（Governor が再分配）
+        """建物収入 + 累進資本課税。建物は崩壊せず、レベルで収入が拡大する。
+        UPGRADEタスクを定期的にスポーンして建物の成長を促す。
         """
-        DEPRECIATION  = 2.0   # 耐久度/tick
         CAPITAL_TAX_STEP = 0.15
         MAX_CAPITAL_TAX  = 0.45
-        rate = Economy.BUILDING_INCOME_RATE
 
-        # ① 減価償却
-        collapsed = [pos for pos, bd in self._buildings.items()
-                     if bd["durability"] - DEPRECIATION <= 0]
-        for pos in collapsed:
-            del self._buildings[pos]
-            self._emit(EventType.BUILDING_INCOME,
-                       data={"event": "collapsed", "x": pos[0], "y": pos[1]})
-        for bdata in self._buildings.values():
-            bdata["durability"] -= DEPRECIATION
+        # ── UPGRADEタスクのスポーン（L1/L2建物が一定期間経過後） ──
+        for pos, bdata in list(self._buildings.items()):
+            lv = bdata.get("level", 1)
+            if lv >= 3:
+                continue  # L3は最大
+            cooldown_end = self._upgrade_cooldown.get(pos, 0)
+            if self.tick < cooldown_end:
+                continue
+            # 既存のUPGRADEタスクが近くにないか確認
+            already = any(
+                t.task_type == TaskType.UPGRADE
+                and t.status in (TaskStatus.OPEN, TaskStatus.ASSIGNED)
+                and t.x == pos[0] and t.y == pos[1]
+                for t in self.tasks
+            )
+            if already:
+                continue
+            reward = self._UPGRADE_REWARD_BY_LEVEL.get(lv, 35.0)
+            t = make_task(pos[0], pos[1], reward=reward, energy_cost=10.0,
+                          tick=self.tick, task_type=TaskType.UPGRADE)
+            self.tasks.append(t)
+            self._upgrade_cooldown[pos] = self.tick + 60  # 60tick後に再チェック
+            self._emit(EventType.TASK_CREATED, task_id=t.task_id,
+                       data={"x": pos[0], "y": pos[1], "reward": reward,
+                             "task_type": TaskType.UPGRADE.value,
+                             "building_level": lv, "expires_at": None})
 
-        # ② 建物収入（累進課税）
+        # ── 建物収入（累進課税）──
         owner_seen: Dict[str, int] = {}
         for (bx, by), bdata in list(self._buildings.items()):
             owner_id = bdata["owner"]
+            lv = bdata.get("level", 1)
+            rate = self._BUILDING_INCOME_BY_LEVEL.get(lv, 0.5)
             if self.economy.tax_pool < rate:
                 break
             owner = self._get_agent(owner_id)
@@ -446,7 +493,7 @@ class Simulator:
             self._emit(EventType.BUILDING_INCOME, agent_id=owner_id,
                        data={"x": bx, "y": by, "income": net_income,
                              "capital_tax": cap_tax,
-                             "durability": round(bdata["durability"], 1),
+                             "level": lv,
                              "balance": round(owner.balance, 1)})
 
     def _run_memory_market(self) -> None:
@@ -601,7 +648,8 @@ class Simulator:
             energy=self.rng.uniform(60, 90),
             balance=self.rng.uniform(50, 90),
             experience=self.rng.randint(20, 50),  # 未来ではすでに多数完了済み
-            expires_at=self.tick + self.rng.randint(20, 35),  # 限られた滞在時間
+            expires_at=self.tick + self.rng.randint(20, 35) * (
+                3 if self._has_active_invention("temporal_anchor") else 1),
         )
         idx = self._role_counts.get(AgentRole.WORKER, 0)
         self._role_counts[AgentRole.WORKER] = idx + 1
@@ -866,11 +914,30 @@ class Simulator:
             if task is None or not task.is_illegal:
                 continue
             agent.spend_energy(Agent.WORK_COST)
-            # 違法報酬は無税（全額受取）
-            agent.balance += task.reward
+            # gift_economy: 違法タスクが合法化され課税対象になる
+            if self._has_active_invention("gift_economy"):
+                tax_rate = self.economy.current_tax_rate
+                net = task.reward * (1.0 - tax_rate)
+                self.economy.tax_pool += task.reward * tax_rate
+                agent.balance += net
+                task.status = TaskStatus.COMPLETED
+                task.completed_tick = self.tick
+                agent.experience += 1
+                self._emit(EventType.ILLEGAL_TASK_COMPLETED, agent_id=agent.agent_id,
+                           task_id=task.task_id,
+                           data={"reward": task.reward, "steal": 0.0,
+                                 "victim_id": None,
+                                 "task_type": task.task_type.value,
+                                 "balance": round(agent.balance, 1),
+                                 "gift_economy": True})
+                continue
+            # 違法報酬は無税（全額受取）。量子暗号炉: SMUGGLE報酬3倍
+            reward_mult = (3.0 if task.task_type == TaskType.SMUGGLE
+                           and self._has_active_invention("crypto_reactor") else 1.0)
+            agent.balance += task.reward * reward_mult
             steal_amount = 0.0
             victim_id = None
-            if task.task_type == TaskType.HACK:
+            if task.task_type == TaskType.HACK and not self._has_active_invention("crypto_reactor"):
                 # 近隣から EC 窃取（公安以外が対象）
                 victims = sorted(
                     [a for a in self.agents
@@ -896,6 +963,8 @@ class Simulator:
                              "balance": round(agent.balance, 1)})
             # 近くの公安が目撃 → 証拠蓄積
             ev_gain = 6.0 if task.task_type == TaskType.HACK else 4.0
+            if self._has_active_invention("blind_dimension"):
+                ev_gain *= 0.5
             for koan_id in self._koan_agents:
                 koan = self._get_agent(koan_id)
                 if koan and abs(koan.x - agent.x) + abs(koan.y - agent.y) <= 4:
@@ -935,7 +1004,8 @@ class Simulator:
                                if (sa := self._get_agent(sid)) and
                                abs(sa.x - obs.x) + abs(sa.y - obs.y) <= 5]
             for sid in suspects_nearby[:1]:
-                self._koan_evidence[sid] = self._koan_evidence.get(sid, 0.0) + 5.0
+                tip_ev = 2.5 if self._has_active_invention("blind_dimension") else 5.0
+                self._koan_evidence[sid] = self._koan_evidence.get(sid, 0.0) + tip_ev
                 self._emit(EventType.INFORMANT_TIP, agent_id=obs.agent_id,
                            data={"suspect_id": sid,
                                  "evidence_gain": 5.0,
@@ -1295,7 +1365,10 @@ class Simulator:
         for agent in self.agents:
             dep = self._bank_deposits.get(agent.agent_id, 0.0)
             if dep > 0:
-                interest = round(dep * self._bank_interest_rate, 2)
+                rate = self._bank_interest_rate
+                if self._has_active_invention("entropy_reversal"):
+                    rate *= 5.0
+                interest = round(dep * rate, 2)
                 agent.balance += interest
                 self._bank_deposits[agent.agent_id] += interest
                 self._bank_reserves += interest * 0.5  # 準備金へ半分
@@ -1533,19 +1606,39 @@ class Simulator:
         self._temporal_stress += 5
 
     def _move_agents(self) -> None:
+        toroidal = self._has_active_invention("toroidal_grid")
+        jump_inv = self._get_active_invention("jump_gate")
         for agent in self.agents:
             if agent.status != AgentStatus.MOVING or agent.target_x is None:
                 continue
             nx, ny = agent.move_toward(agent.target_x, agent.target_y)
+            # トーラス折り畳み: 端に達したら反対側に出現
+            if toroidal:
+                if nx <= 0:
+                    nx = self.world.width - 2
+                elif nx >= self.world.width - 1:
+                    nx = 1
+                if ny <= 0:
+                    ny = self.world.height - 2
+                elif ny >= self.world.height - 1:
+                    ny = 1
             if self.world.is_passable(nx, ny):
                 agent.x, agent.y = nx, ny
                 agent.spend_energy(Agent.MOVE_COST)
-                # 建物セルを通過 → 移動コストの一部を回収（耐久あり建物のみ）
-                bdata = self._buildings.get((nx, ny))
-                if bdata and bdata["durability"] > 0:
+                # 建物セルを通過 → 移動コストの一部を回収
+                if self._buildings.get((nx, ny)):
                     agent.energy = min(Agent.MAX_ENERGY, agent.energy + 0.3)
+                # ジャンプゲート瞬間移動
+                if jump_inv:
+                    p = jump_inv["params"]
+                    ga, gb = p.get("gate_a"), p.get("gate_b")
+                    if ga and gb:
+                        if (agent.x, agent.y) == ga and self.world.is_passable(*gb):
+                            agent.x, agent.y = gb[0], gb[1]
+                        elif (agent.x, agent.y) == gb and self.world.is_passable(*ga):
+                            agent.x, agent.y = ga[0], ga[1]
                 self._emit(EventType.AGENT_MOVED, agent_id=agent.agent_id,
-                           data={"x": nx, "y": ny, "energy": round(agent.energy, 1)})
+                           data={"x": agent.x, "y": agent.y, "energy": round(agent.energy, 1)})
             if agent.x == agent.target_x and agent.y == agent.target_y:
                 agent.status = AgentStatus.WORKING
 
@@ -1562,7 +1655,15 @@ class Simulator:
                 continue  # 違法タスクは _process_illegal_completions() で処理
             agent.spend_energy(Agent.WORK_COST)
             net = task.reward * (1 - self.policy_params["tax_rate"])
+            if self._has_active_invention("chaos_amplifier"):
+                net = round(net * 1.8, 2)
             agent.balance += net
+            # 集合意識: 報酬の0.5%を共有プールへ
+            cc_inv = self._get_active_invention("collective_consciousness")
+            if cc_inv:
+                contrib = round(net * 0.005, 3)
+                agent.balance = max(0.0, agent.balance - contrib)
+                cc_inv["_pool"] = cc_inv.get("_pool", 0.0) + contrib
             task.status = TaskStatus.COMPLETED
             task.completed_tick = self.tick
             # 税収の30%をGovernorへ — KPIスコアで倍率調整（良い都市統治ほど多く稼げる）
@@ -1580,16 +1681,42 @@ class Simulator:
                     self._emit(EventType.GOVERNANCE_REWARD, agent_id=gov.agent_id,
                                data={"reason": "tax_dividend", "reward": share,
                                      "kpi_factor": kpi_factor, "task_id": task.task_id})
-            # CONSTRUCT完了 → 建物を登録（耐久度100でスタート）
+            # CONSTRUCT完了 → 建物を登録（L1からスタート、崩壊なし）
             if task.task_type == TaskType.CONSTRUCT:
                 self._buildings[(task.x, task.y)] = {
-                    "owner": agent.agent_id, "durability": 100.0, "built_tick": self.tick
+                    "owner": agent.agent_id, "level": 1, "built_tick": self.tick
                 }
+                self._upgrade_cooldown[(task.x, task.y)] = self.tick + 40
                 self._emit(EventType.BUILDING_INCOME, agent_id=agent.agent_id,
                            data={"event": "built", "x": task.x, "y": task.y,
+                                 "level": 1,
                                  "buildings_total": len(self._buildings)})
-            # 経験値加算（記憶資本）
-            agent.experience += 1
+            # UPGRADE完了 → 建物をL+1に強化
+            elif task.task_type == TaskType.UPGRADE:
+                bdata = self._buildings.get((task.x, task.y))
+                if bdata and bdata.get("level", 1) < 3:
+                    bdata["level"] += 1
+                    self._upgrade_cooldown[(task.x, task.y)] = self.tick + 80
+                    self._emit(EventType.BUILDING_UPGRADED, agent_id=agent.agent_id,
+                               data={"x": task.x, "y": task.y,
+                                     "level": bdata["level"],
+                                     "buildings_total": len(self._buildings)})
+            # GATHER完了 → リソースノードから原材料を採集
+            if task.task_type == TaskType.GATHER:
+                node = self._resource_nodes.get((task.x, task.y))
+                gathered = 0
+                if node and node["stock"] > 0:
+                    gathered = min(node["stock"], self.rng.randint(2, 4))
+                    node["stock"] -= gathered
+                    agent.resources = min(agent.resources + gathered, 8)
+                    if node["stock"] <= 0:
+                        node["respawn_at"] = self.tick + self.rng.randint(25, 40)
+                self._emit(EventType.RESOURCE_GATHERED, agent_id=agent.agent_id,
+                           data={"x": task.x, "y": task.y,
+                                 "gathered": gathered,
+                                 "carrying": agent.resources})
+            # 経験値加算（記憶資本）。記憶洪水: 2倍
+            agent.experience += 2 if self._has_active_invention("memory_flood") else 1
             # 同盟相手にボーナスの5%をシェア
             if agent.ally_id:
                 ally = self._get_agent(agent.ally_id)
@@ -1620,6 +1747,681 @@ class Simulator:
                 agent.charge()
                 agent.status = AgentStatus.CHARGING
                 self._emit(EventType.AGENT_CHARGED, agent_id=agent.agent_id, data={"energy": agent.energy})
+
+    # ── 生産チェーン ─────────────────────────────────────────────────────
+
+    RESOURCE_NODE_STOCK   = 8   # ノード初期在庫
+    RESOURCE_PROCESS_RATE = 5.0 # 1リソースあたりの加工報酬 (EC)
+
+    def _run_production_chain(self) -> None:
+        """リソースノードのスポーン・再生 + Worker の建物での自動加工。"""
+        # ── ノードスポーン ──
+        if self.tick >= self._next_resource_spawn:
+            self._spawn_resource_node()
+            self._next_resource_spawn = self.tick + self.rng.randint(12, 22)
+
+        # ── ノード再生 ──
+        for pos, node in list(self._resource_nodes.items()):
+            if node["stock"] == 0 and self.tick >= node.get("respawn_at", 0):
+                node["stock"] = self.RESOURCE_NODE_STOCK
+                self._emit(EventType.RESOURCE_SPAWNED,
+                           data={"x": pos[0], "y": pos[1], "stock": node["stock"],
+                                 "event": "restock"})
+
+        # ── GATHERタスクのスポーン（ノードに紐づける） ──
+        for pos, node in list(self._resource_nodes.items()):
+            if node["stock"] <= 0:
+                continue
+            already = any(
+                t.task_type == TaskType.GATHER
+                and t.status in (TaskStatus.OPEN, TaskStatus.ASSIGNED)
+                and t.x == pos[0] and t.y == pos[1]
+                for t in self.tasks
+            )
+            if already:
+                continue
+            reward = round(self.rng.uniform(3.0, 8.0), 1)
+            t = make_task(pos[0], pos[1], reward=reward, energy_cost=2.0,
+                          tick=self.tick, task_type=TaskType.GATHER,
+                          expires_in=30)
+            self.tasks.append(t)
+            self._emit(EventType.TASK_CREATED, task_id=t.task_id,
+                       data={"x": pos[0], "y": pos[1], "reward": reward,
+                             "task_type": TaskType.GATHER.value})
+
+        # ── 建物での自動加工（resources持参Workerが建物に隣接） ──
+        for agent in self.agents:
+            if agent.resources <= 0:
+                continue
+            if agent.role not in (AgentRole.WORKER, AgentRole.TRADER):
+                continue
+            # 隣接する建物を探す
+            for pos, bdata in self._buildings.items():
+                bx, by = pos
+                if abs(agent.x - bx) + abs(agent.y - by) > 1:
+                    continue
+                lv = bdata.get("level", 1)
+                if lv < 1:
+                    continue
+                # 加工: resources → EC（建物レベルで倍率変化）
+                process_mult = {1: 1.0, 2: 1.8, 3: 3.0}.get(lv, 1.0)
+                processed = agent.resources
+                gained = round(processed * self.RESOURCE_PROCESS_RATE * process_mult, 1)
+                agent.resources = 0
+                agent.balance += gained
+                self._emit(EventType.RESOURCE_PROCESSED, agent_id=agent.agent_id,
+                           data={"x": bx, "y": by, "processed": processed,
+                                 "income": gained, "building_level": lv,
+                                 "balance": round(agent.balance, 1)})
+                break  # 1tickに1棟のみ
+
+    def _spawn_resource_node(self) -> None:
+        """グリッド上のランダムな場所にリソースノードをスポーン。"""
+        for _ in range(40):
+            x = self.rng.randint(2, self.world.width - 3)
+            y = self.rng.randint(2, self.world.height - 3)
+            if self.world.is_passable(x, y) and (x, y) not in self._resource_nodes:
+                break
+        else:
+            return
+        self._resource_nodes[(x, y)] = {
+            "stock": self.RESOURCE_NODE_STOCK,
+            "respawn_at": 0,
+        }
+        self._emit(EventType.RESOURCE_SPAWNED,
+                   data={"x": x, "y": y, "stock": self.RESOURCE_NODE_STOCK,
+                         "event": "spawn"})
+
+    # ── 精神と時の部屋 ────────────────────────────────────────────────────
+
+    CHAMBER_CAPACITY        = 2    # 同時入室上限
+    CHAMBER_REAL_TICKS      = 8    # 滞在 real tick 数
+    CHAMBER_INNER_MULT      = 10   # 1 real tick = 10 inner tick（経験値）
+    CHAMBER_MOVE_LO         = 30   # 移動間隔（下限）
+    CHAMBER_MOVE_HI         = 50   # 移動間隔（上限）
+    CHAMBER_ENTRY_COST      = 12.0 # 入室コスト EC
+    GENIUS_EXP_THRESHOLD    = 80   # 退室時の合計経験値がこれ以上で天才覚醒
+
+    def _run_chamber(self) -> None:
+        """部屋の移動・発見・入退室・訓練をまとめて処理。"""
+        # 初期化 or 移動タイミング
+        if self._chamber_pos is None or self.tick >= self._chamber_next_move:
+            self._move_chamber()
+        self._chamber_discover()
+        self._chamber_enter()
+        self._chamber_train()
+        self._chamber_exit()
+
+    def _move_chamber(self) -> None:
+        # 中にいるエージェントを強制退出
+        for aid in list(self._chamber_agents):
+            a = self._get_agent(aid)
+            if a:
+                a.status = AgentStatus.IDLE
+        self._chamber_agents.clear()
+        self._knows_chamber.clear()  # 場所の知識もリセット
+
+        # 地区ごとにランダムな内側の座標を探す
+        for _ in range(60):
+            x = self.rng.randint(3, self.world.width - 4)
+            y = self.rng.randint(3, self.world.height - 4)
+            if self.world.is_passable(x, y):
+                break
+        else:
+            x, y = self.world.width // 2, self.world.height // 2
+
+        self._chamber_pos = (x, y)
+        self._chamber_next_move = self.tick + self.rng.randint(
+            self.CHAMBER_MOVE_LO, self.CHAMBER_MOVE_HI)
+        self._emit(EventType.CHAMBER_MOVED,
+                   data={"x": x, "y": y, "next_move": self._chamber_next_move})
+
+    def _chamber_discover(self) -> None:
+        if self._chamber_pos is None:
+            return
+        cx, cy = self._chamber_pos
+        from layer0.core.ai import WorkerAI, WorkerTrait
+
+        for agent in self.agents:
+            if agent.agent_id in self._knows_chamber:
+                continue
+            ai = self._ai.get(agent.agent_id)
+
+            # CHRONO はいつでも知っている（未来から来た）
+            if agent.expires_at is not None:
+                self._knows_chamber.add(agent.agent_id)
+                self._emit(EventType.CHAMBER_DISCOVERED, agent_id=agent.agent_id,
+                           data={"x": cx, "y": cy, "method": "chrono_foresight"})
+                continue
+
+            # EXPLORER が半径 10 以内にいると 25%/tick で発見
+            if (agent.role == AgentRole.WORKER
+                    and isinstance(ai, WorkerAI)
+                    and ai.trait == WorkerTrait.EXPLORER
+                    and abs(agent.x - cx) + abs(agent.y - cy) <= 10
+                    and self.rng.random() < 0.25):
+                self._knows_chamber.add(agent.agent_id)
+                self._emit(EventType.CHAMBER_DISCOVERED, agent_id=agent.agent_id,
+                           data={"x": cx, "y": cy, "method": "exploration"})
+
+            # 同盟相手が知っていれば 50% で共有
+            if (agent.ally_id in self._knows_chamber
+                    and self.rng.random() < 0.50):
+                self._knows_chamber.add(agent.agent_id)
+                self._emit(EventType.CHAMBER_DISCOVERED, agent_id=agent.agent_id,
+                           data={"x": cx, "y": cy, "method": "ally_tip"})
+
+    def _chamber_enter(self) -> None:
+        if self._chamber_pos is None:
+            return
+        if len(self._chamber_agents) >= self.CHAMBER_CAPACITY:
+            return
+        cx, cy = self._chamber_pos
+
+        for agent in self.agents:
+            if len(self._chamber_agents) >= self.CHAMBER_CAPACITY:
+                break
+            if agent.agent_id in self._chamber_agents:
+                continue
+            if agent.agent_id not in self._knows_chamber:
+                continue
+            if agent.role != AgentRole.WORKER:
+                continue
+            if agent.balance < self.CHAMBER_ENTRY_COST:
+                continue
+            if agent.arrested_until is not None and self.tick <= agent.arrested_until:
+                continue
+            if agent.assigned_task_id is not None:
+                continue
+            if agent.chamber_sessions >= 3:  # 3回までで効果は逓減
+                continue
+
+            dist = abs(agent.x - cx) + abs(agent.y - cy)
+            if dist > 2:
+                # 部屋に向かって移動
+                agent.target_x, agent.target_y = cx, cy
+                continue
+
+            # 入室
+            agent.balance -= self.CHAMBER_ENTRY_COST
+            agent.status = AgentStatus.WORKING
+            self._chamber_agents[agent.agent_id] = self.tick
+            self._emit(EventType.CHAMBER_ENTERED, agent_id=agent.agent_id,
+                       data={"x": cx, "y": cy,
+                             "experience_before": agent.experience,
+                             "session": agent.chamber_sessions + 1})
+
+    def _chamber_train(self) -> None:
+        for aid in self._chamber_agents:
+            a = self._get_agent(aid)
+            if a is None:
+                continue
+            # CHRONO は 1.5× 速度で学習（未来の記憶がある）
+            mult = 1.5 if a.expires_at is not None else 1.0
+            gain = int(self.CHAMBER_INNER_MULT * mult)
+            a.experience += gain
+            a.energy = max(0.0, a.energy - 2.5)  # 高負荷訓練
+
+    def _chamber_exit(self) -> None:
+        for aid in list(self._chamber_agents):
+            entered = self._chamber_agents[aid]
+            if self.tick - entered < self.CHAMBER_REAL_TICKS:
+                continue
+            a = self._get_agent(aid)
+            exp_before = a.experience - (self.tick - entered) * self.CHAMBER_INNER_MULT if a else 0
+            del self._chamber_agents[aid]
+            if a is None:
+                continue
+
+            a.status = AgentStatus.IDLE
+            a.chamber_sessions += 1
+            exp_gained = a.experience - max(0, exp_before)
+
+            self._emit(EventType.CHAMBER_EXITED, agent_id=aid,
+                       data={"experience": a.experience,
+                             "sessions": a.chamber_sessions,
+                             "exp_gained": exp_gained})
+
+            # 天才覚醒チェック（1エージェント1回限り）
+            if (a.experience >= self.GENIUS_EXP_THRESHOLD
+                    and aid not in self._genius_set):
+                self._genius_set.add(aid)
+                self._emerge_genius(a)
+
+    # ── 天才覚醒・発明合成 ────────────────────────────────────────────────
+
+    _INVENTION_SPECS = [
+        {"type": "toroidal_grid",
+         "sig": {"temporal": 3, "chaos": 2},
+         "traits": {"chrono": 3, "explorer": 2, "gambler": 1}},
+        {"type": "jump_gate",
+         "sig": {"temporal": 2, "social": 1, "crime": 1},
+         "traits": {"explorer": 3, "drifter": 2, "opportunist": 1}},
+        {"type": "reverse_tax",
+         "sig": {"political": 3, "economic": 1},
+         "traits": {"rebel": 3, "nihilist": 2, "drifter": 1}},
+        {"type": "crypto_reactor",
+         "sig": {"crime": 3, "economic": 1},
+         "traits": {"gambler": 2, "hustler": 2, "opportunist": 1}},
+        {"type": "blind_dimension",
+         "sig": {"crime": 2, "political": 2},
+         "traits": {"opportunist": 2, "explorer": 2, "nihilist": 1}},
+        {"type": "chaos_amplifier",
+         "sig": {"chaos": 3, "political": 1},
+         "traits": {"gambler": 3, "rebel": 2, "hustler": 1}},
+        {"type": "entropy_reversal",
+         "sig": {"economic": 3, "chaos": 1},
+         "traits": {"specialist": 2, "saver": 2, "hustler": 1}},
+        {"type": "memory_flood",
+         "sig": {"social": 3, "temporal": 1},
+         "traits": {"conformist": 2, "saver": 2, "drifter": 1}},
+        {"type": "collective_consciousness",
+         "sig": {"social": 2, "economic": 2, "political": 1},
+         "traits": {"drifter": 3, "conformist": 2, "nihilist": 1}},
+    ]
+
+    _INVENTION_META = {
+        "toroidal_grid": {
+            "name_tmpl":   "{aid}の時空折り畳み理論（tick{tick}）",
+            "description": "グリッドがトーラス化。端と端がつながり、距離の概念が崩壊する。"
+                           "右端から一歩踏み出すと左端に出現する。",
+            "duration": 60,
+        },
+        "jump_gate": {
+            "name_tmpl":   "{aid}の時間跳躍ゲート（tick{tick}）",
+            "description": "二つの地点間に瞬間移動口が出現。"
+                           "片方に踏み込むとゼロコストで対の地点へ転送される。",
+            "duration": 70,
+        },
+        "reverse_tax": {
+            "name_tmpl":   "{aid}の逆税装置（tick{tick}）",
+            "description": "税の流れが逆転する。Governor の税プールが毎tick Worker たちへ還流し続ける。",
+            "duration": 50,
+        },
+        "crypto_reactor": {
+            "name_tmpl":   "{aid}の量子暗号炉（tick{tick}）",
+            "description": "全取引が量子暗号化。HACK による窃取が物理的に不可能になり、"
+                           "SMUGGLE 報酬は3倍に跳ね上がる。",
+            "duration": 40,
+        },
+        "blind_dimension": {
+            "name_tmpl":   "{aid}の死角次元（tick{tick}）",
+            "description": "公安の感知能力が半減する隠れ空間が出現。"
+                           "すべてのエージェントが薄い影に守られる。",
+            "duration": 45,
+        },
+        "chaos_amplifier": {
+            "name_tmpl":   "{aid}のカオス増幅器（tick{tick}）",
+            "description": "全事象の振れ幅が増幅する。勝者はより豊かに、敗者はより貧しくなる。"
+                           "報酬は最大1.8倍、ただし失敗のコストも1.8倍。",
+            "duration": 35,
+        },
+        "entropy_reversal": {
+            "name_tmpl":   "{aid}のエントロピー反転炉（tick{tick}）",
+            "description": "熱力学の法則が局所的に反転。銀行利息が5倍になる代わりに"
+                           "維持費も3倍となる。極端な経済加速が始まる。",
+            "duration": 40,
+        },
+        "memory_flood": {
+            "name_tmpl":   "{aid}の記憶洪水（tick{tick}）",
+            "description": "知識が社会全体に溢れ出す。タスク完了による経験値獲得が全員2倍になる。",
+            "duration": 55,
+        },
+        "collective_consciousness": {
+            "name_tmpl":   "{aid}の集合意識体（tick{tick}）",
+            "description": "自律的な集合知が誕生。全タスク報酬から0.5%を吸収し、"
+                           "最貧困の5体へ毎tick還元し続ける。",
+            "duration": 80,
+        },
+    }
+
+    # 永久技術になるための経験値閾値
+    GENIUS_PERMANENT_THRESHOLD = 120
+
+    def _emerge_genius(self, agent: "Agent") -> None:  # type: ignore[name-defined]
+        """天才覚醒: 世界の歴史を読み解き、唯一の発明を合成する。
+        経験値 >= 120 の超天才は発明が永久技術として世界に刻まれる。
+        """
+        sig = self._analyze_world_signature()
+        is_permanent = agent.experience >= self.GENIUS_PERMANENT_THRESHOLD
+        inv = self._synthesize_invention(sig, agent, permanent=is_permanent)
+
+        if is_permanent:
+            self._permanent_inventions.append(inv)
+            self._emit(EventType.INVENTION_PERMANENT, agent_id=agent.agent_id,
+                       data={"invention_name": inv["name"],
+                             "invention_type": inv["type"],
+                             "experience": agent.experience,
+                             "signature": sig})
+        else:
+            self._active_inventions.append(inv)
+
+        self._genius_history.append({
+            "agent_id": agent.agent_id,
+            "tick": self.tick,
+            "invention": inv["name"],
+            "type": inv["type"],
+            "exp": agent.experience,
+            "permanent": is_permanent,
+        })
+        agent.genius_until = self.tick + 60
+        agent.emotion_level = min(10.0, agent.emotion_level + 8.0)
+
+        self._emit(EventType.GENIUS_EMERGED, agent_id=agent.agent_id,
+                   data={"experience": agent.experience,
+                         "invention_name": inv["name"],
+                         "invention_type": inv["type"],
+                         "permanent": is_permanent,
+                         "signature": sig})
+        self._emit(EventType.GENESIS_EVENT, agent_id=agent.agent_id,
+                   data={"name": inv["name"],
+                         "type": inv["type"],
+                         "description": inv["description"],
+                         "permanent": is_permanent,
+                         "expires_at": inv.get("expires_at")})
+
+    def _analyze_world_signature(self) -> dict:
+        """直近 100tick のイベント分布から世界の『個性ベクトル』を計算する。"""
+        recent = [e for e in self.event_log
+                  if e.tick > max(0, self.tick - 100)]
+        total = max(len(recent), 1)
+
+        def r(*types):
+            return sum(1 for e in recent if e.event_type in types) / total
+
+        return {
+            "chaos":     r(EventType.PARADOX_COLLAPSE, EventType.EMOTION_RIOT),
+            "crime":     r(EventType.ILLEGAL_TASK_COMPLETED, EventType.KOAN_ARREST,
+                           EventType.SHADOW_DEAL),
+            "temporal":  r(EventType.CHRONO_ARRIVAL, EventType.TEMPORAL_EXPOSURE,
+                           EventType.TEMPORAL_LOAN),
+            "political": r(EventType.GOVERNOR_IMPEACHED, EventType.COUP_SUCCEEDED,
+                           EventType.COUP_FAILED),
+            "economic":  r(EventType.BANK_DEFAULT, EventType.MARKET_CRASH,
+                           EventType.STOCK_SOLD),
+            "social":    r(EventType.CULT_JOINED, EventType.MEMORY_TRADE,
+                           EventType.BASIC_INCOME_PAID),
+        }
+
+    def _synthesize_invention(self, sig: dict, agent: "Agent",  # type: ignore[name-defined]
+                              permanent: bool = False) -> dict:
+        """署名ベクトル × トレイトでスコアリングし、世界で唯一の発明タイプを決定する。"""
+        from layer0.core.ai import WorkerAI
+        ai = self._ai.get(agent.agent_id)
+        trait_val = (ai.trait.value.lower()
+                     if isinstance(ai, WorkerAI) and hasattr(ai, "trait") else "drifter")
+
+        scores = []
+        for spec in self._INVENTION_SPECS:
+            score = sum(sig.get(ax, 0) * w for ax, w in spec["sig"].items())
+            score += spec["traits"].get(trait_val, 0) * 1.5
+            score += self.rng.gauss(0, 0.03)
+            scores.append(score)
+
+        best = self._INVENTION_SPECS[scores.index(max(scores))]
+        itype = best["type"]
+        meta  = self._INVENTION_META[itype]
+        name  = meta["name_tmpl"].format(aid=agent.agent_id, tick=self.tick)
+
+        params: dict = {}
+        if itype == "jump_gate":
+            for _ in range(40):
+                ax = self.rng.randint(2, self.world.width // 2 - 2)
+                ay = self.rng.randint(2, self.world.height - 3)
+                if self.world.is_passable(ax, ay):
+                    break
+            for _ in range(40):
+                bx = self.rng.randint(self.world.width // 2 + 2, self.world.width - 3)
+                by = self.rng.randint(2, self.world.height - 3)
+                if self.world.is_passable(bx, by):
+                    break
+            params = {"gate_a": (ax, ay), "gate_b": (bx, by)}
+
+        expires = None if permanent else self.tick + meta["duration"]
+        return {
+            "type":           itype,
+            "name":           name,
+            "description":    meta["description"],
+            "duration":       meta["duration"],
+            "expires_at":     expires,
+            "permanent":      permanent,
+            "inventor":       agent.agent_id,
+            "activated_tick": self.tick,
+            "params":         params,
+            "_pool":          0.0,
+        }
+
+    # ── 発明効果の適用 ────────────────────────────────────────────────────
+
+    def _has_active_invention(self, itype: str) -> bool:
+        # 永久技術 or まだ期限切れでない一時技術
+        if any(inv["type"] == itype for inv in self._permanent_inventions):
+            return True
+        return any(inv["type"] == itype and inv["expires_at"] is not None
+                   and inv["expires_at"] > self.tick
+                   for inv in self._active_inventions)
+
+    def _get_active_invention(self, itype: str) -> Optional[dict]:
+        for inv in self._permanent_inventions:
+            if inv["type"] == itype:
+                return inv
+        for inv in self._active_inventions:
+            if inv["type"] == itype and inv["expires_at"] is not None and inv["expires_at"] > self.tick:
+                return inv
+        return None
+
+    def _apply_invention_effects(self) -> None:
+        """毎 tick、アクティブ・永久両方の発明の持続効果を適用する。"""
+        all_inventions = list(self._active_inventions) + list(self._permanent_inventions)
+        for inv in all_inventions:
+            # 一時発明は期限チェック、永久発明はスキップ
+            if not inv.get("permanent", False):
+                if inv.get("expires_at") is None or inv["expires_at"] <= self.tick:
+                    continue
+            itype = inv["type"]
+
+            if itype == "reverse_tax":
+                # 税プール → Worker へ逆流（2%/tick）
+                workers = [a for a in self.agents
+                           if a.role == AgentRole.WORKER
+                           and a.agent_id not in self._koan_agents]
+                if workers and self.economy.tax_pool > 1.0:
+                    flow  = round(self.economy.tax_pool * 0.02, 2)
+                    share = round(flow / len(workers), 3)
+                    for w in workers:
+                        w.balance += share
+                    self.economy.tax_pool = max(0.0, self.economy.tax_pool - flow)
+
+            elif itype == "collective_consciousness":
+                # 内部プールを最貧困 5 体へ還元
+                pool = inv.get("_pool", 0.0)
+                if pool > 0.1:
+                    poorest = sorted(self.agents, key=lambda a: a.balance)[:5]
+                    share = round(pool / max(len(poorest), 1), 3)
+                    for a in poorest:
+                        a.balance += share
+                    inv["_pool"] = 0.0
+
+            # ── コンボ発明の持続効果 ──────────────────────────────────────────
+
+            elif itype == "time_crystal":
+                # 全エージェントのエネルギーを +2/tick 自然回復
+                for a in self.agents:
+                    a.energy = min(Agent.MAX_ENERGY, a.energy + 2.0)
+
+            elif itype == "hive_mind":
+                # 最高経験値エージェントの知識の20%を全員に毎tick伝播
+                if self.agents:
+                    top_exp = max(a.experience for a in self.agents)
+                    share = max(1, int(top_exp * 0.20) // 10)
+                    for a in self.agents:
+                        if a.experience < top_exp:
+                            a.experience = min(top_exp, a.experience + share)
+
+            elif itype == "recursive_growth":
+                # 80tick毎に建物レベルを自動上昇（UPGRADE不要）
+                if self.tick % 80 == 0:
+                    for bdata in self._buildings.values():
+                        if bdata.get("level", 1) < 3:
+                            bdata["level"] += 1
+
+            elif itype == "quantum_tunnel":
+                # 5tick毎に移動中エージェントを5%の確率で建物間ワープ
+                if self._buildings and self.tick % 5 == 0:
+                    building_list = list(self._buildings.keys())
+                    for agent in self.agents:
+                        if agent.status == AgentStatus.MOVING and self.rng.random() < 0.05:
+                            dest = self.rng.choice(building_list)
+                            if self.world.is_passable(*dest):
+                                agent.x, agent.y = dest
+
+            # post_scarcity: _deduct_upkeep() でチェック
+            # gift_economy:  _process_illegal_completions() でチェック
+            # temporal_anchor: _maybe_chrono_arrival() でチェック
+
+    def _decay_inventions(self) -> None:
+        """期限切れの一時発明を除去。永久技術は除去しない。"""
+        self._active_inventions = [
+            inv for inv in self._active_inventions
+            if inv.get("expires_at") is not None and inv["expires_at"] > self.tick
+        ]
+
+    # ── コンボ発明（永久技術の組み合わせから予期しない発明が生まれる） ────────
+
+    # コンボ専用スペック（通常スペックより高い軸スコアが必要）
+    _COMBO_SPECS = [
+        {"type": "quantum_tunnel",
+         "requires": {"temporal": 0.05, "chaos": 0.03},   # 両軸が高い場合に解禁
+         "sig": {"temporal": 8, "chaos": 4},
+         "traits": {"chrono": 5, "explorer": 3}},
+        {"type": "time_crystal",
+         "requires": {"temporal": 0.04, "economic": 0.03},
+         "sig": {"temporal": 6, "economic": 4},
+         "traits": {"saver": 4, "specialist": 3}},
+        {"type": "post_scarcity",
+         "requires": {"economic": 0.05, "political": 0.04},
+         "sig": {"economic": 7, "political": 5},
+         "traits": {"rebel": 4, "drifter": 3}},
+        {"type": "hive_mind",
+         "requires": {"social": 0.05, "temporal": 0.03},
+         "sig": {"social": 8, "temporal": 3},
+         "traits": {"conformist": 5, "drifter": 3}},
+        {"type": "recursive_growth",
+         "requires": {"chaos": 0.04, "social": 0.04},
+         "sig": {"chaos": 5, "social": 5},
+         "traits": {"hustler": 3, "explorer": 3}},
+        {"type": "gift_economy",
+         "requires": {"crime": 0.04, "political": 0.04},
+         "sig": {"crime": 6, "political": 6},
+         "traits": {"rebel": 4, "nihilist": 3}},
+        {"type": "temporal_anchor",
+         "requires": {"temporal": 0.06, "crime": 0.02},
+         "sig": {"temporal": 9, "crime": 3},
+         "traits": {"chrono": 6, "gambler": 3}},
+    ]
+
+    _COMBO_META = {
+        "quantum_tunnel": {
+            "name_tmpl":   "【量子トンネル理論】（tick{tick}）",
+            "description": "空間そのものが量子化される。すべてのジャンプゲートが統合され、"
+                           "エージェントはどの建物間でも瞬間移動できる普遍的な転送網が誕生する。",
+        },
+        "time_crystal":  {
+            "name_tmpl":   "【時間結晶炉】（tick{tick}）",
+            "description": "時間が物質として結晶化する。全エージェントのエネルギーが"
+                           "毎tick +2 自然回復する。充電ステーションは補助的な役割になる。",
+        },
+        "post_scarcity": {
+            "name_tmpl":   "【脱希少性宣言】（tick{tick}）",
+            "description": "希少性の概念が廃止される。維持費（upkeep）が永久に0になる。"
+                           "生存コストから解放された都市が、創造のみに専念できる時代が来る。",
+        },
+        "hive_mind":     {
+            "name_tmpl":   "【集合知覚醒】（tick{tick}）",
+            "description": "個体の意識が部分的に融合する。最高経験値エージェントの知識の"
+                           "20%が毎tick全員に伝播する。個人の天才が社会の天才になる。",
+        },
+        "recursive_growth": {
+            "name_tmpl":   "【自己増殖建築】（tick{tick}）",
+            "description": "建物が自律的に自己拡張する意志を持つ。UPGRADEタスクなしで"
+                           "80tick毎に建物レベルが自動的に上昇する。都市が生き物になる。",
+        },
+        "gift_economy":  {
+            "name_tmpl":   "【贈与経済体制】（tick{tick}）",
+            "description": "違法と合法の境界が消滅する。HACK・SMUGGLEが通常タスクと同等に"
+                           "扱われ、課税が適用される。地下経済が地上に昇華する。",
+        },
+        "temporal_anchor": {
+            "name_tmpl":   "【時間錨定理論】（tick{tick}）",
+            "description": "時間旅行者の存在が安定化される。全CHRONOエージェントの"
+                           "滞在期間が3倍に延長される。未来からの移民が定住を始める。",
+        },
+    }
+
+    def _check_combo_inventions(self) -> None:
+        """永久技術が2個以上ある場合、100tick毎にコンボ発明の合成を試みる。"""
+        if self.tick < self._combo_check_next:
+            return
+        self._combo_check_next = self.tick + 100
+
+        if len(self._permanent_inventions) < 2:
+            return
+
+        # 永久技術の署名を合算
+        combined_sig: dict = {ax: 0.0 for ax in
+                               ("chaos", "crime", "temporal", "political", "economic", "social")}
+        for inv in self._permanent_inventions:
+            inv_sig = inv.get("signature", {})
+            for ax in combined_sig:
+                combined_sig[ax] += inv_sig.get(ax, 0.0)
+
+        # スコアリング（コンボ専用スペック）
+        eligible = []
+        for spec in self._COMBO_SPECS:
+            ctype = spec["type"]
+            if ctype in self._combo_made_types:
+                continue
+            # 必要軸スコア条件を満たすか
+            reqs = spec.get("requires", {})
+            if not all(combined_sig.get(ax, 0) >= th for ax, th in reqs.items()):
+                continue
+            score = sum(combined_sig.get(ax, 0) * w for ax, w in spec["sig"].items())
+            score += self.rng.gauss(0, 0.01)
+            eligible.append((score, spec))
+
+        if not eligible:
+            return
+
+        # 最高スコアのコンボを合成
+        _, best = max(eligible, key=lambda x: x[0])
+        ctype = best["type"]
+        meta  = self._COMBO_META[ctype]
+        name  = meta["name_tmpl"].format(tick=self.tick)
+
+        # コンボ発明は永久技術として登録
+        combo_inv = {
+            "type":           ctype,
+            "name":           name,
+            "description":    meta["description"],
+            "duration":       None,
+            "expires_at":     None,
+            "permanent":      True,
+            "inventor":       "COMBO",
+            "activated_tick": self.tick,
+            "params":         {},
+            "_pool":          0.0,
+            "signature":      dict(combined_sig),
+            "source_inventions": [inv["name"] for inv in self._permanent_inventions],
+        }
+        self._permanent_inventions.append(combo_inv)
+        self._combo_made_types.add(ctype)
+
+        self._emit(EventType.COMBO_EMERGED,
+                   data={"name": name,
+                         "type": ctype,
+                         "description": meta["description"],
+                         "source_inventions": combo_inv["source_inventions"],
+                         "combined_signature": combined_sig})
 
     # ── 弾劾・クーデター ──────────────────────────────────────────────────
 
