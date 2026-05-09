@@ -89,6 +89,11 @@ class EventType(str, Enum):
     RESOURCE_GATHERED     = "ResourceGathered"     # Workerがリソースを採集
     RESOURCE_PROCESSED    = "ResourceProcessed"    # 建物でリソースを加工・売却
     BUILDING_UPGRADED     = "BuildingUpgraded"     # 建物がレベルアップ
+    # ── 複数通貨 ───────────────────────────────────────────────────
+    RT_EARNED             = "RTEarned"             # RT獲得（採集・加工）
+    RT_SPENT              = "RTSpent"              # RT消費（部屋入室・UPGRADE入札）
+    RT_EXCHANGED          = "RTExchanged"          # TraderがEC↔RT交換仲介
+    TR_CHANGED            = "TRChanged"            # TR変動（良い行動/悪い行動）
 
 
 # EventType → MQTT トピックのマッピング

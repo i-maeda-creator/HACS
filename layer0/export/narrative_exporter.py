@@ -31,6 +31,7 @@ class NarrativeExporter:
             self._section_crime(),
             self._section_temporal(),
             self._section_economy(),
+            self._section_currency(),
             self._section_society(),
             self._section_stocks(),
             self._section_production(),
@@ -299,6 +300,37 @@ class NarrativeExporter:
                               f"(価格{e.payload.get('price',0):.2f}EC → 強制リセット)")
         if not (buys or sells or dividends or crashes):
             lines.append("  （株式取引なし）")
+        return "\n".join(lines)
+
+    # ── 複数通貨面（RT / TR） ────────────────────────────────────────────
+    def _section_currency(self) -> str:
+        lines = [self._section_header("複数通貨経済 — RT・TR レポート")]
+        rt_earned  = self._by_type.get(EventType.RT_EARNED, [])
+        rt_spent   = self._by_type.get(EventType.RT_SPENT, [])
+        rt_exch    = self._by_type.get(EventType.RT_EXCHANGED, [])
+        tr_changed = self._by_type.get(EventType.TR_CHANGED, [])
+
+        if rt_earned:
+            total = sum(e.payload.get("rt", 0) for e in rt_earned)
+            lines.append(f"  RT獲得: {len(rt_earned)}件 / 合計 {total:.1f} RT")
+        if rt_spent:
+            total = sum(e.payload.get("rt", 0) for e in rt_spent)
+            lines.append(f"  RT消費: {len(rt_spent)}件 / 合計 {total:.1f} RT")
+        if rt_exch:
+            peer_trades = [e for e in rt_exch if e.payload.get("direction") == "Worker→Trader→EC"]
+            total_rt_traded = sum(e.payload.get("rt", 0) for e in peer_trades)
+            lines.append(f"  RT両替仲介: {len(peer_trades)}件 / 合計 {total_rt_traded:.1f} RT")
+        if tr_changed:
+            pos = sum(e.payload.get("delta", 0) for e in tr_changed if e.payload.get("delta", 0) > 0)
+            neg = sum(e.payload.get("delta", 0) for e in tr_changed if e.payload.get("delta", 0) < 0)
+            lines.append(f"  TR変動: +{pos:.1f} / {neg:.1f}  （{len(tr_changed)}件）")
+            from collections import Counter
+            reasons = Counter(e.payload.get("reason", "?") for e in tr_changed)
+            for reason, cnt in reasons.most_common(5):
+                lines.append(f"    {reason}: {cnt}件")
+
+        if not (rt_earned or rt_exch or tr_changed):
+            lines.append("  （今号は通貨活動なし）")
         return "\n".join(lines)
 
     # ── 生産チェーン面 ────────────────────────────────────────────────────

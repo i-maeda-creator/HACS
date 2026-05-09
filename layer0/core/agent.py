@@ -45,6 +45,8 @@ class Agent:
     chamber_sessions: int = 0             # 精神と時の部屋への入室回数
     genius_until: Optional[int] = None    # 天才ステータスの終了tick
     resources: int = 0                    # 所持リソース数（採集した原材料）
+    rt: float = 0.0                       # Resource Token（物質経済通貨 — 採集・加工で獲得）
+    tr: float = 0.0                       # Trust Rating（社会信用 — 行動で変動、売買不可）
 
     MOVE_COST = 0.5
     WORK_COST = 2.0

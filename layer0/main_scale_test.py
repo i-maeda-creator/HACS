@@ -465,6 +465,44 @@ def main():
     print(f"  CHRONO到来: {len(chrono_arrivals)}件  正体発覚: {len(chrono_exposures)}件")
     print(f"  パラドックス崩壊: {len(paradoxes)}件")
 
+    # ── 複数通貨（RT / TR） ──────────────────────────────────────
+    rt_earned_evs  = [e for e in sim.event_log if e.event_type == ET.RT_EARNED]
+    rt_spent_evs   = [e for e in sim.event_log if e.event_type == ET.RT_SPENT]
+    rt_exch_evs    = [e for e in sim.event_log if e.event_type == ET.RT_EXCHANGED]
+    tr_changed_evs = [e for e in sim.event_log if e.event_type == ET.TR_CHANGED]
+    print(f"\n=== 複数通貨 (RT / TR) ===")
+    total_rt_earned = sum(e.payload.get("rt", 0) for e in rt_earned_evs)
+    total_rt_spent  = sum(e.payload.get("rt", 0) for e in rt_spent_evs)
+    total_rt_exch   = sum(e.payload.get("rt", 0) for e in rt_exch_evs)
+    print(f"  RT獲得: {total_rt_earned:.1f}  RT消費: {total_rt_spent:.1f}  "
+          f"RT両替: {total_rt_exch:.1f}件={len(rt_exch_evs)}")
+    print(f"  TR変動イベント: {len(tr_changed_evs)}件")
+    tr_by_reason = defaultdict(float)
+    for e in tr_changed_evs:
+        tr_by_reason[e.payload.get("reason", "?")] += e.payload.get("delta", 0)
+    for reason, delta in sorted(tr_by_reason.items(), key=lambda x: x[1]):
+        print(f"    {reason:20s}: {delta:+.1f}")
+    # 役職別 RT / TR 平均
+    print(f"\n  役職別 RT/TR 平均:")
+    by_role_rt = defaultdict(list)
+    by_role_tr = defaultdict(list)
+    for a in sim.agents:
+        by_role_rt[a.role.value].append(a.rt)
+        by_role_tr[a.role.value].append(a.tr)
+    for role in sorted(by_role_rt):
+        avg_rt = sum(by_role_rt[role]) / len(by_role_rt[role])
+        avg_tr = sum(by_role_tr[role]) / len(by_role_tr[role])
+        n = len(by_role_rt[role])
+        print(f"    {role:10s}: avg RT={avg_rt:5.1f}  avg TR={avg_tr:+5.1f}  n={n}")
+    # TR トップ5 / ボトム5
+    all_tr = sorted(sim.agents, key=lambda a: a.tr, reverse=True)
+    print(f"\n  TR トップ5:")
+    for a in all_tr[:5]:
+        print(f"    {a.agent_id} ({a.role.value:8s}): TR={a.tr:+.1f}  EC={a.balance:.1f}  RT={a.rt:.1f}")
+    print(f"  TR ボトム5:")
+    for a in all_tr[-5:]:
+        print(f"    {a.agent_id} ({a.role.value:8s}): TR={a.tr:+.1f}  EC={a.balance:.1f}  RT={a.rt:.1f}")
+
     # ── パフォーマンス ────────────────────────────────────────────
     max_ms = max(tick_times) * 1000
     avg_ms = sum(tick_times) / len(tick_times) * 1000

@@ -392,6 +392,28 @@ class EventReplayer:
             if e.agent_id in self._agents:
                 self._agents[e.agent_id].role = "Worker"
 
+        elif et == EventType.RT_EARNED:
+            pass  # RT は AgentState 外フィールド（EC残高に影響しない）
+
+        elif et == EventType.RT_SPENT:
+            pass  # RT消費（EC残高に影響しない）
+
+        elif et == EventType.RT_EXCHANGED:
+            # Worker→Trader→EC: Worker は EC 受取、Trader は差益
+            if p.get("direction") == "Worker→Trader→EC":
+                trader_id = e.agent_id
+                seller_id = p.get("seller_id")
+                ec_paid   = p.get("ec_paid", 0.0)
+                ec_profit = p.get("ec_profit", 0.0)
+                if seller_id and seller_id in self._agents:
+                    self._agents[seller_id].balance += ec_paid
+                if trader_id in self._agents:
+                    # net effect: -ec_paid + ec_profit
+                    self._agents[trader_id].balance += (ec_profit - ec_paid)
+
+        elif et == EventType.TR_CHANGED:
+            pass  # TR は AgentState 外フィールド（EC残高に影響しない）
+
     # ── スナップショット作成 ─────────────────────────────────────
     def _snapshot(self, tick: int) -> WorldSnapshot:
         import copy

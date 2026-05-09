@@ -1,6 +1,7 @@
 from __future__ import annotations
 import random
 import json
+from collections import deque, defaultdict
 from typing import Dict, List, Optional
 from pathlib import Path
 from layer0.core.world import World, Cell
@@ -103,6 +104,14 @@ class Simulator:
         self._genius_history: list = []                  # 天才・発明の記録
         self._combo_check_next: int = 100                # 次のコンボチェックtick
         self._combo_made_types: set = set()              # 作成済みコンボ種別
+        # ── 世界署名スライディングウィンドウ（O(1)最適化） ──────────────
+        self._sig_last_idx: int = 0                      # 前回処理したevent_logの末尾インデックス
+        self._sig_window: deque = deque()                # (tick, {event_type: count}) の100tick分
+        self._sig_totals: dict = defaultdict(int)        # ウィンドウ内の各イベントタイプの合計数
+        self._current_tick_events: List[Event] = []      # 今tickに発火したイベント（毎tick冒頭でリセット）
+        self._task_index: Dict[str, Task] = {}           # task_id → Task の高速ルックアップ
+        # ── 複数通貨 ─────────────────────────────────────────────
+        self._rt_market_rate: float = 5.0             # EC per RT（Traderが仲介する交換レート）
         # ── 生産チェーン ──────────────────────────────────────────
         self._resource_nodes: Dict[tuple, dict] = {}    # (x,y)→{"stock":int,"respawn_at":int}
         self._next_resource_spawn: int = 10             # 次のノードスポーンtick
@@ -178,15 +187,22 @@ class Simulator:
 
         t = make_task(x, y, reward=reward, energy_cost=cost,
                       tick=self.tick, task_type=task_type, expires_in=expires_in)
-        self.tasks.append(t)
+        self._register_task(t)
         self._emit(EventType.TASK_CREATED, task_id=t.task_id,
                    data={"x": x, "y": y, "reward": reward,
                          "task_type": task_type.value,
                          "expires_at": t.expires_at})
         return t
 
+    def _register_task(self, t: Task) -> None:
+        """タスクをリストとインデックスに登録する。"""
+        self.tasks.append(t)
+        self._task_index[t.task_id] = t
+
     def step(self) -> StateSnapshot:
         self.tick += 1
+        # 現在tickイベントキャッシュをリセット
+        self._current_tick_events = []
         # 影の市場バッファリセット（新 tick）
         self._shadow_sat.clear()
         # 逮捕期間終了エージェントを釈放
@@ -248,6 +264,8 @@ class Simulator:
         self._heal_agents()
         # Memory Market（Trader による記憶売買）
         self._run_memory_market()
+        # RT市場（Trader によるEC↔RT両替仲介）
+        self._run_rt_market()
         # 時空歪曲メカニクス
         self._process_temporal_loans()
         self._run_time_market()
@@ -304,9 +322,9 @@ class Simulator:
 
         workers = [a for a in self.agents if a.role == AgentRole.WORKER]
         if workers:
-            earned = {e.agent_id for e in self.event_log
-                      if e.event_type == EventType.TASK_COMPLETED and e.agent_id}
-            worker_idle_ratio = 1.0 - sum(1 for w in workers if w.agent_id in earned) / len(workers)
+            worker_idle_ratio = sum(
+                1 for w in workers if w.status == AgentStatus.IDLE
+            ) / len(workers)
         else:
             worker_idle_ratio = 0.0
 
@@ -346,6 +364,10 @@ class Simulator:
                         self._emit(EventType.GOVERNANCE_REWARD, agent_id=gov_id,
                                    data={"action": action, "reward": reward,
                                          "consensus_factor": consensus_factor})
+                    if gov_agent:
+                        gov_agent.tr = round(gov_agent.tr + 3.0, 1)
+                        self._emit(EventType.TR_CHANGED, agent_id=gov_id,
+                                   data={"delta": 3.0, "reason": "policy_passed", "tr": gov_agent.tr})
 
     def _apply_policy(self, proposal: Dict, factor: float = 1.0) -> None:
         action = proposal.get("action")
@@ -464,7 +486,7 @@ class Simulator:
             reward = self._UPGRADE_REWARD_BY_LEVEL.get(lv, 35.0)
             t = make_task(pos[0], pos[1], reward=reward, energy_cost=10.0,
                           tick=self.tick, task_type=TaskType.UPGRADE)
-            self.tasks.append(t)
+            self._register_task(t)
             self._upgrade_cooldown[pos] = self.tick + 60  # 60tick後に再チェック
             self._emit(EventType.TASK_CREATED, task_id=t.task_id,
                        data={"x": pos[0], "y": pos[1], "reward": reward,
@@ -558,6 +580,55 @@ class Simulator:
                                      "experience": mem["experience"], "price": sell_price,
                                      "boost_ticks": 8})
                     break
+
+    # ── RT市場 ────────────────────────────────────────────────────────
+
+    RT_WORKER_SELL_THRESHOLD = 4.0   # WorkerがこのRT量以上で売却を検討
+    RT_SELL_RATIO            = 0.5   # 保有RTのうち売却する割合
+    RT_TRADER_MARKUP         = 1.3   # Traderの転売マークアップ
+
+    def _run_rt_market(self) -> None:
+        """RT市場: TraderがWorkerからRTを買取→EC換算して利益を得る。
+        Worker側: RT > threshold なら近くのTraderにRT売却（EC受取）。
+        Trader側: RTを買ったあと即時EC換算（マークアップ付き）。
+        """
+        for trader in self.agents:
+            if trader.role != AgentRole.TRADER:
+                continue
+            if trader.balance < self._rt_market_rate:  # EC不足なら買えない
+                continue
+
+            # 周囲のRT持ちWorkerを探す
+            sellers = [
+                a for a in self.agents
+                if a.role == AgentRole.WORKER
+                and a.rt >= self.RT_WORKER_SELL_THRESHOLD
+                and abs(a.x - trader.x) + abs(a.y - trader.y) <= 3
+            ]
+            if not sellers:
+                continue
+
+            seller   = self.rng.choice(sellers)
+            rt_sold  = round(seller.rt * self.RT_SELL_RATIO, 1)
+            ec_paid  = round(rt_sold * self._rt_market_rate, 1)
+            if trader.balance < ec_paid:
+                ec_paid = round(trader.balance * 0.9, 1)
+                rt_sold = round(ec_paid / self._rt_market_rate, 1)
+            if rt_sold <= 0:
+                continue
+
+            # Worker: RT→EC
+            seller.rt      = round(seller.rt - rt_sold, 1)
+            seller.balance = round(seller.balance + ec_paid, 1)
+            # Trader: EC→RT→即時換算（マークアップ利益）
+            trader.balance = round(trader.balance - ec_paid, 1)
+            ec_profit = round(rt_sold * self._rt_market_rate * self.RT_TRADER_MARKUP, 1)
+            trader.balance = round(trader.balance + ec_profit, 1)
+            self._emit(EventType.RT_EXCHANGED, agent_id=trader.agent_id,
+                       data={"seller_id": seller.agent_id, "rt": rt_sold,
+                             "ec_paid": ec_paid, "ec_profit": ec_profit,
+                             "rate": self._rt_market_rate,
+                             "direction": "Worker→Trader→EC"})
 
     # ── 時空歪曲メカニクス ───────────────────────────────────────────
 
@@ -678,6 +749,9 @@ class Simulator:
             share = round(legacy / max(len(nearby), 1), 1) if nearby else 0.0
             for n in nearby:
                 n.balance += share
+            agent.tr = round(agent.tr + 5.0, 1)
+            self._emit(EventType.TR_CHANGED, agent_id=agent.agent_id,
+                       data={"delta": 5.0, "reason": "chrono_survived", "tr": agent.tr})
             self._emit(EventType.CHRONO_DEPARTURE, agent_id=agent.agent_id,
                        data={"final_balance": round(agent.balance, 1),
                              "legacy": legacy,
@@ -713,18 +787,25 @@ class Simulator:
                 client.energy = min(Agent.MAX_ENERGY, client.energy + heal)
                 client.balance -= cost
                 medic.balance  += cost
+                medic.tr = round(medic.tr + 2.0, 1)
                 self._emit(EventType.HEALING_DONE, agent_id=medic.agent_id,
                            data={"target_id": client.agent_id, "heal": heal,
                                  "cost": cost, "medic_balance": round(medic.balance, 1)})
+                self._emit(EventType.TR_CHANGED, agent_id=medic.agent_id,
+                           data={"delta": 2.0, "reason": "healing", "tr": medic.tr})
                 break  # 1tic につき1体のみ治療
 
     def _expire_tasks(self) -> None:
-        """期限切れタスク（URGENT など）を失効させる。"""
+        """期限切れタスク（URGENT など）を失効させる。50tick毎に完了・期限切れタスクを刈り取る。"""
         for t in self.tasks:
             if t.is_expired(self.tick):
                 t.status = TaskStatus.EXPIRED
                 self._emit(EventType.TASK_CREATED, task_id=t.task_id,
                            data={"event": "expired", "task_type": t.task_type.value})
+        # 50tick毎にtasksリストをコンパクト化（インデックスは保持）
+        if self.tick % 50 == 0:
+            self.tasks = [t for t in self.tasks
+                          if t.status in (TaskStatus.OPEN, TaskStatus.ASSIGNED)]
 
     def _revert_market_event(self) -> None:
         if self._market_event:
@@ -763,6 +844,9 @@ class Simulator:
                     bid_amount *= role_bonus
                     if agent.role == AgentRole.WORKER:
                         bid_amount += self.policy_params["worker_bid_bonus"]
+                    # TR ボーナス: 社会信用が高いほど入札力が上がる（0.5%/TR）
+                    if agent.tr > 0:
+                        bid_amount *= (1.0 + agent.tr * 0.005)
                     # CHRONO 疑惑が高い場合はカモフラージュ（入札を意図的に下げて目立たない）
                     if (isinstance(ai, WorkerAI) and ai.trait == WorkerTrait.CHRONO
                             and self._chrono_suspicion.get(agent.agent_id, 0.0) > 8.0):
@@ -866,7 +950,7 @@ class Simulator:
             task_type=task_type, created_tick=self.tick,
             expires_at=expires_at, is_illegal=True,
         )
-        self.tasks.append(t)
+        self._register_task(t)
         self._emit(EventType.ILLEGAL_TASK_CREATED, task_id=t.task_id,
                    data={"x": x, "y": y, "reward": reward,
                          "task_type": task_type.value, "expires_at": expires_at})
@@ -1051,10 +1135,13 @@ class Simulator:
             self._koan_evidence.pop(aid, None)
             self._arrest_count += 1
             self._total_seized += seized
+            agent.tr = round(agent.tr - 5.0, 1)
             self._emit(EventType.KOAN_ARREST, agent_id=aid,
                        data={"seized": seized,
                              "balance_after": round(agent.balance, 1),
                              "arrested_until": agent.arrested_until})
+            self._emit(EventType.TR_CHANGED, agent_id=aid,
+                       data={"delta": -5.0, "reason": "arrested", "tr": agent.tr})
 
     def _release_arrested(self) -> None:
         """逮捕期間終了エージェントを釈放。"""
@@ -1194,6 +1281,9 @@ class Simulator:
                 v.balance = max(0.0, v.balance - loot)
                 rioter.balance += loot
             rioter.emotion_level = min(10.0, rioter.emotion_level + 3.0)  # 発散でちょっとスッキリ
+            rioter.tr = round(rioter.tr - 2.0, 1)
+            self._emit(EventType.TR_CHANGED, agent_id=rioter.agent_id,
+                       data={"delta": -2.0, "reason": "riot", "tr": rioter.tr})
         self._emit(EventType.EMOTION_RIOT,
                    data={"rioters": len(rioters),
                          "buildings_destroyed": damage_done,
@@ -1266,9 +1356,8 @@ class Simulator:
     def _update_cult(self) -> None:
         """CHRONO到来やParadox目撃者がカルトを形成・拡大する。"""
         # CHRONO到来イベントの目撃者をカルト候補に
-        recent_chrono = [e for e in self.event_log
-                         if e.tick == self.tick
-                         and e.event_type in (EventType.CHRONO_ARRIVAL, EventType.PARADOX_COLLAPSE)]
+        recent_chrono = [e for e in self._current_tick_events
+                         if e.event_type in (EventType.CHRONO_ARRIVAL, EventType.PARADOX_COLLAPSE)]
         for event in recent_chrono:
             ex = event.payload.get("x", 10)
             ey = event.payload.get("y", 10)
@@ -1443,9 +1532,12 @@ class Simulator:
                 self._bank_reserves += seized
                 agent.balance = 0.0
                 agent.emotion_level = max(-10.0, agent.emotion_level - 3.0)
+                agent.tr = round(agent.tr - 3.0, 1)
                 self._emit(EventType.BANK_DEFAULT, agent_id=aid,
                            data={"seized": seized,
                                  "amount_due": loan["amount_due"]})
+                self._emit(EventType.TR_CHANGED, agent_id=aid,
+                           data={"delta": -3.0, "reason": "bank_default", "tr": agent.tr})
 
     # ── 株式市場 ──────────────────────────────────────────────────────
     STOCK_MAX_SHARES = 50  # 1エージェントが保有できる最大株数
@@ -1657,7 +1749,14 @@ class Simulator:
             net = task.reward * (1 - self.policy_params["tax_rate"])
             if self._has_active_invention("chaos_amplifier"):
                 net = round(net * 1.8, 2)
-            agent.balance += net
+            # GATHERタスクはRT（Resource Token）で報酬、ECではない
+            if task.task_type == TaskType.GATHER:
+                agent.rt += round(task.reward, 1)
+                net = 0.0  # EC収入なし
+                self._emit(EventType.RT_EARNED, agent_id=agent.agent_id,
+                           data={"amount": task.reward, "source": "gather", "rt": round(agent.rt, 1)})
+            else:
+                agent.balance += net
             # 集合意識: 報酬の0.5%を共有プールへ
             cc_inv = self._get_active_invention("collective_consciousness")
             if cc_inv:
@@ -1717,6 +1816,18 @@ class Simulator:
                                  "carrying": agent.resources})
             # 経験値加算（記憶資本）。記憶洪水: 2倍
             agent.experience += 2 if self._has_active_invention("memory_flood") else 1
+            # TR付与（社会信用 — タスク種別でボーナス）
+            tr_gain = 1.0
+            if task.task_type == TaskType.CONSTRUCT:
+                tr_gain = 3.0   # 建物を建てると社会への貢献が大きい
+            elif task.task_type == TaskType.UPGRADE:
+                tr_gain = 2.0
+            elif task.task_type == TaskType.SECURITY:
+                tr_gain = 2.0
+            agent.tr = round(agent.tr + tr_gain, 1)
+            self._emit(EventType.TR_CHANGED, agent_id=agent.agent_id,
+                       data={"delta": tr_gain, "reason": "task_completed",
+                             "task_type": task.task_type.value, "tr": agent.tr})
             # 同盟相手にボーナスの5%をシェア
             if agent.ally_id:
                 ally = self._get_agent(agent.ally_id)
@@ -1784,7 +1895,7 @@ class Simulator:
             t = make_task(pos[0], pos[1], reward=reward, energy_cost=2.0,
                           tick=self.tick, task_type=TaskType.GATHER,
                           expires_in=30)
-            self.tasks.append(t)
+            self._register_task(t)
             self._emit(EventType.TASK_CREATED, task_id=t.task_id,
                        data={"x": pos[0], "y": pos[1], "reward": reward,
                              "task_type": TaskType.GATHER.value})
@@ -1803,16 +1914,20 @@ class Simulator:
                 lv = bdata.get("level", 1)
                 if lv < 1:
                     continue
-                # 加工: resources → EC（建物レベルで倍率変化）
+                # 加工: resources → RT（建物レベルで倍率変化）+ 少量EC（市場売却分）
                 process_mult = {1: 1.0, 2: 1.8, 3: 3.0}.get(lv, 1.0)
                 processed = agent.resources
-                gained = round(processed * self.RESOURCE_PROCESS_RATE * process_mult, 1)
+                rt_gained  = round(processed * process_mult, 1)          # RT（実物価値）
+                ec_gained  = round(processed * 2.0 * process_mult, 1)    # EC（市場売却）
                 agent.resources = 0
-                agent.balance += gained
+                agent.rt      = round(agent.rt + rt_gained, 1)
+                agent.balance += ec_gained
                 self._emit(EventType.RESOURCE_PROCESSED, agent_id=agent.agent_id,
                            data={"x": bx, "y": by, "processed": processed,
-                                 "income": gained, "building_level": lv,
-                                 "balance": round(agent.balance, 1)})
+                                 "rt_gained": rt_gained, "income": ec_gained,
+                                 "building_level": lv,
+                                 "balance": round(agent.balance, 1),
+                                 "rt": round(agent.rt, 1)})
                 break  # 1tickに1棟のみ
 
     def _spawn_resource_node(self) -> None:
@@ -1839,7 +1954,7 @@ class Simulator:
     CHAMBER_INNER_MULT      = 10   # 1 real tick = 10 inner tick（経験値）
     CHAMBER_MOVE_LO         = 30   # 移動間隔（下限）
     CHAMBER_MOVE_HI         = 50   # 移動間隔（上限）
-    CHAMBER_ENTRY_COST      = 12.0 # 入室コスト EC
+    CHAMBER_ENTRY_COST      = 3.0  # 入室コスト RT（Resource Token）
     GENIUS_EXP_THRESHOLD    = 80   # 退室時の合計経験値がこれ以上で天才覚醒
 
     def _run_chamber(self) -> None:
@@ -1927,8 +2042,10 @@ class Simulator:
                 continue
             if agent.role != AgentRole.WORKER:
                 continue
-            if agent.balance < self.CHAMBER_ENTRY_COST:
-                continue
+            if agent.rt < self.CHAMBER_ENTRY_COST:
+                continue  # RTが足りない（ECではなくRTが必要）
+            if agent.tr < 0:
+                continue  # 社会信用マイナスは入室不可
             if agent.arrested_until is not None and self.tick <= agent.arrested_until:
                 continue
             if agent.assigned_task_id is not None:
@@ -1942,8 +2059,11 @@ class Simulator:
                 agent.target_x, agent.target_y = cx, cy
                 continue
 
-            # 入室
-            agent.balance -= self.CHAMBER_ENTRY_COST
+            # 入室 — RTを消費
+            agent.rt = round(agent.rt - self.CHAMBER_ENTRY_COST, 1)
+            self._emit(EventType.RT_SPENT, agent_id=agent.agent_id,
+                       data={"amount": self.CHAMBER_ENTRY_COST,
+                             "reason": "chamber_entry", "rt": round(agent.rt, 1)})
             agent.status = AgentStatus.WORKING
             self._chamber_agents[agent.agent_id] = self.tick
             self._emit(EventType.CHAMBER_ENTERED, agent_id=agent.agent_id,
@@ -2075,15 +2195,16 @@ class Simulator:
         },
     }
 
-    # 永久技術になるための経験値閾値
-    GENIUS_PERMANENT_THRESHOLD = 120
+    # 永久技術になるための条件（experience≥80 かつ TR≥3）
+    GENIUS_PERMANENT_THRESHOLD = 80
 
     def _emerge_genius(self, agent: "Agent") -> None:  # type: ignore[name-defined]
         """天才覚醒: 世界の歴史を読み解き、唯一の発明を合成する。
         経験値 >= 120 の超天才は発明が永久技術として世界に刻まれる。
         """
         sig = self._analyze_world_signature()
-        is_permanent = agent.experience >= self.GENIUS_PERMANENT_THRESHOLD
+        is_permanent = (agent.experience >= self.GENIUS_PERMANENT_THRESHOLD
+                        and agent.tr >= 3.0)
         inv = self._synthesize_invention(sig, agent, permanent=is_permanent)
 
         if is_permanent:
@@ -2121,13 +2242,30 @@ class Simulator:
                          "expires_at": inv.get("expires_at")})
 
     def _analyze_world_signature(self) -> dict:
-        """直近 100tick のイベント分布から世界の『個性ベクトル』を計算する。"""
-        recent = [e for e in self.event_log
-                  if e.tick > max(0, self.tick - 100)]
-        total = max(len(recent), 1)
+        """直近 100tick のイベント分布から世界の『個性ベクトル』を計算する。
+        スライディングウィンドウで O(events_per_tick) — 全ログスキャンを回避。"""
+        # 新しいイベントをウィンドウに追加
+        new_events = self.event_log[self._sig_last_idx:]
+        self._sig_last_idx = len(self.event_log)
+        if new_events:
+            tick_counts: dict = defaultdict(int)
+            for e in new_events:
+                tick_counts[e.event_type] += 1
+            self._sig_window.append((self.tick, dict(tick_counts)))
+            for et, cnt in tick_counts.items():
+                self._sig_totals[et] += cnt
+
+        # 100tick より古いエントリを除去
+        cutoff = self.tick - 100
+        while self._sig_window and self._sig_window[0][0] <= cutoff:
+            old_tick, old_counts = self._sig_window.popleft()
+            for et, cnt in old_counts.items():
+                self._sig_totals[et] -= cnt
+
+        total = max(sum(self._sig_totals.values()), 1)
 
         def r(*types):
-            return sum(1 for e in recent if e.event_type in types) / total
+            return sum(self._sig_totals.get(t, 0) for t in types) / total
 
         return {
             "chaos":     r(EventType.PARADOX_COLLAPSE, EventType.EMOTION_RIOT),
@@ -2558,7 +2696,7 @@ class Simulator:
     def _emit(self, event_type: EventType, agent_id: Optional[str] = None,
               task_id: Optional[str] = None, data: Optional[Dict] = None) -> None:
         self._seq += 1
-        self.event_log.append(Event(
+        e = Event(
             tick=self.tick,
             sequence_id=self._seq,
             event_type=event_type,
@@ -2566,13 +2704,15 @@ class Simulator:
             agent_id=agent_id,
             task_id=task_id,
             payload=data or {},
-        ))
+        )
+        self.event_log.append(e)
+        self._current_tick_events.append(e)
 
     def _get_agent(self, agent_id: Optional[str]) -> Optional[Agent]:
         return next((a for a in self.agents if a.agent_id == agent_id), None)
 
     def _get_task(self, task_id: Optional[str]) -> Optional[Task]:
-        return next((t for t in self.tasks if t.task_id == task_id), None)
+        return self._task_index.get(task_id) if task_id else None
 
     def _snapshot(self) -> StateSnapshot:
         active = [t for t in self.tasks
