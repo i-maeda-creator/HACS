@@ -599,11 +599,14 @@ class Simulator:
                 continue
 
             # 周囲のRT持ちWorkerを探す
+            # ただし部屋を発見済みでRT入室可能なWorkerは売却しない（部屋優先）
             sellers = [
                 a for a in self.agents
                 if a.role == AgentRole.WORKER
                 and a.rt >= self.RT_WORKER_SELL_THRESHOLD
                 and abs(a.x - trader.x) + abs(a.y - trader.y) <= 3
+                and not (a.agent_id in self._knows_chamber
+                         and a.rt >= self.CHAMBER_ENTRY_COST)
             ]
             if not sellers:
                 continue
@@ -831,6 +834,12 @@ class Simulator:
                 # IDLE エージェントに加え、巡回中（MOVING かつ未アサイン）も入札可
                 can_bid = (agent.status == AgentStatus.IDLE or
                            (agent.status == AgentStatus.MOVING and agent.assigned_task_id is None))
+                # 部屋発見済み + RT足りてる Worker は部屋を優先して入札をスキップ
+                if (can_bid
+                        and agent.agent_id in self._knows_chamber
+                        and agent.rt >= self.CHAMBER_ENTRY_COST
+                        and agent.tr >= 0):
+                    continue
                 if can_bid and agent.energy > task.energy_cost:
                     # タスクタイプ別役職ボーナス確認（0.0 = 入札不可）
                     role_bonus = task.role_bid_bonus(agent.role)
@@ -1915,7 +1924,10 @@ class Simulator:
                 if lv < 1:
                     continue
                 # 加工: resources → RT（建物レベルで倍率変化）+ 少量EC（市場売却分）
+                # 工業地区（NE: x=22-38, y=2-18）の建物は+50%生産性ボーナス
                 process_mult = {1: 1.0, 2: 1.8, 3: 3.0}.get(lv, 1.0)
+                if 22 <= bx <= 38 and 2 <= by <= 18:
+                    process_mult *= 1.5  # 工業地区ボーナス
                 processed = agent.resources
                 rt_gained  = round(processed * process_mult, 1)          # RT（実物価値）
                 ec_gained  = round(processed * 2.0 * process_mult, 1)    # EC（市場売却）
@@ -1931,29 +1943,38 @@ class Simulator:
                 break  # 1tickに1棟のみ
 
     def _spawn_resource_node(self) -> None:
-        """グリッド上のランダムな場所にリソースノードをスポーン。"""
+        """グリッド上のランダムな場所にリソースノードをスポーン。
+        50%の確率で工業地区（NE: x=22-38, y=2-18）に集中スポーン。
+        """
+        in_industrial = self.rng.random() < 0.50
         for _ in range(40):
-            x = self.rng.randint(2, self.world.width - 3)
-            y = self.rng.randint(2, self.world.height - 3)
+            if in_industrial:
+                x = self.rng.randint(22, 38)
+                y = self.rng.randint(2, 18)
+            else:
+                x = self.rng.randint(2, self.world.width - 3)
+                y = self.rng.randint(2, self.world.height - 3)
             if self.world.is_passable(x, y) and (x, y) not in self._resource_nodes:
                 break
         else:
             return
+        # 工業地区のノードは在庫が多い（豊富な資源）
+        stock = self.RESOURCE_NODE_STOCK * 2 if in_industrial else self.RESOURCE_NODE_STOCK
         self._resource_nodes[(x, y)] = {
-            "stock": self.RESOURCE_NODE_STOCK,
+            "stock": stock,
             "respawn_at": 0,
         }
         self._emit(EventType.RESOURCE_SPAWNED,
-                   data={"x": x, "y": y, "stock": self.RESOURCE_NODE_STOCK,
-                         "event": "spawn"})
+                   data={"x": x, "y": y, "stock": stock,
+                         "event": "spawn", "district": "industrial" if in_industrial else "any"})
 
     # ── 精神と時の部屋 ────────────────────────────────────────────────────
 
-    CHAMBER_CAPACITY        = 2    # 同時入室上限
+    CHAMBER_CAPACITY        = 4    # 同時入室上限
     CHAMBER_REAL_TICKS      = 8    # 滞在 real tick 数
     CHAMBER_INNER_MULT      = 10   # 1 real tick = 10 inner tick（経験値）
-    CHAMBER_MOVE_LO         = 30   # 移動間隔（下限）
-    CHAMBER_MOVE_HI         = 50   # 移動間隔（上限）
+    CHAMBER_MOVE_LO         = 50   # 移動間隔（下限）
+    CHAMBER_MOVE_HI         = 80   # 移動間隔（上限）
     CHAMBER_ENTRY_COST      = 3.0  # 入室コスト RT（Resource Token）
     GENIUS_EXP_THRESHOLD    = 80   # 退室時の合計経験値がこれ以上で天才覚醒
 

@@ -8,7 +8,7 @@ from layer0.engine.simulator import Simulator
 from layer0.core.agent import Agent, AgentRole
 from layer0.core.world import World
 
-TICKS = 200
+TICKS = 2000
 SEED  = 42
 
 
