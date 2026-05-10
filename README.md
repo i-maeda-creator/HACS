@@ -23,17 +23,30 @@ Layer0 が生成したイベントを MQTT が中継し、Layer3 が監視・制
 
 ---
 
-## 7つの役職
+## シミュレーション規模
 
-| 役職 | 色 | 役割 | 収入源 |
-|------|----|------|--------|
-| **Worker** | 🟢 緑 | タスクをオークション入札で獲得。5種の性格特性が戦略を決定 | タスク報酬 |
-| **Guardian** | 🔴 赤 | 5点ルートを永続パトロール。治安タスクにも入札 | パトロール給与 + 治安タスク |
-| **Trader** | 🟠 橙 | 市場平均をEMAで学習し高マージンタスクを選別。記憶売買の仲介も担う | タスク報酬 + 記憶マージン |
-| **Observer** | 🔵 青 | 4象限を分担カバー。調査タスクに入札 | パトロール給与 + 調査タスク |
-| **Governor** | 🟣 紫 | 25tick毎にKPI分析→政策提案。税収の配当で収入を得る | 税配当（KPI連動） |
-| **Medic** | ⚪ 白 | 低エネルギーのエージェントに接近し治療サービスを提供 | 治療費（EC） |
-| **Architect** | 🟡 黄 | 建設タスク専門。完成した建物が毎tick不労所得を生む | 建設報酬 + 建物収入 |
+| 項目 | 値 |
+|------|-----|
+| グリッド | **40×40**（四地区: 下町NW / 工業NE / 治安SW / 商業SE） |
+| エージェント | **106体** |
+| 標準ティック数 | **2000 tick** |
+| 総イベント数 | ~288,000件 / 2000tick |
+| テスト | **132テスト全通過** |
+
+---
+
+## 8つの役職
+
+| 役職 | 体数 | 役割 | 収入源 |
+|------|------|------|--------|
+| **Worker** | 60 | タスクをオークション入札で獲得。RTを採集・売却 | タスク報酬 + RT売却 |
+| **Guardian** | 12 | 5点ルートを永続パトロール。治安タスクにも入札 | パトロール給与 + 治安タスク |
+| **Trader** | 8 | 市場平均をEMAで学習し高マージンタスクを選別。Worker からRT を仕入れEC に換算 | タスク報酬 + RT転換益 |
+| **Observer** | 8 | 4象限を分担カバー。密告で治安維持に貢献 | パトロール給与 + 調査タスク |
+| **Governor** | 4 | 25tick毎にKPI分析→政策提案。税収の配当で収入 | 税配当（KPI連動） |
+| **Medic** | 6 | 低エネルギーのエージェントに接近し治療を提供 | 治療費（EC） |
+| **Architect** | 4 | 建設タスク専門。完成した建物が毎tick不労所得を生む | 建設報酬 + 建物収入 |
+| **公安 (KOAN)** | 4 | Workerに潜入し違法タスクの証拠を蓄積。閾値到達で逮捕 | 内部予算 |
 
 ### Worker 11種の性格特性
 
@@ -51,10 +64,10 @@ Layer0 が生成したイベントを MQTT が中継し、Layer3 が監視・制
 | **DRIFTER** | 漂流者：どこでもそこそこ、専門なし |
 | **CHRONO** | 🕰️ 時間旅行者：未来から来た存在。完璧な入札で登場・期限付き消滅 |
 
-### 全役職に3種の性格
+### 全役職3種の性格バリエーション
 
-| 役職 | 性格バリエーション |
-|------|-----------------|
+| 役職 | 性格 |
+|------|------|
 | Guardian | STOIC / AGGRESSIVE / VIGILANT |
 | Trader | ANALYST / SHARK / SPECULATOR |
 | Observer | SYSTEMATIC / VISIONARY / INFORMANT |
@@ -64,76 +77,169 @@ Layer0 が生成したイベントを MQTT が中継し、Layer3 が監視・制
 
 ---
 
-## ロボット固有メカニクス
+## 3通貨システム
+
+| 通貨 | 記号 | 性質 | 主な流れ |
+|------|------|------|---------|
+| **EC** (経済クレジット) | EC | 汎用・譲渡可 | タスク報酬 / 税収 / 建物収入 |
+| **RT** (Resource Token) | RT | 物理労働の証明・売買可 | 採集→Worker保有→Trader仕入 |
+| **TR** (Trust Rating) | TR | 非売品・信頼指標 | タスク完了+1 / 逮捕-5 / 治療+2 |
+
+### RT の流れ
+```
+Worker が GATHER タスクで RT 採集
+  → RT >= 4.0 で Trader が近距離から買取（市場レート）
+  → Trader は RT を EC に 1.3倍 マークアップで換算
+  → 部屋発見済み Worker は RT を部屋入室コストとして消費
+```
+
+### TR の変動ルール
+
+| イベント | TR変動 |
+|----------|--------|
+| タスク完了 | +1.0（CONSTRUCT +3、UPGRADE/SECURITY +2） |
+| Medic 治療 | +2.0 |
+| 政策可決 | Governor +3.0 |
+| CHRONO 生存 | +5.0 |
+| 逮捕 | -5.0 |
+| 暴動参加 | -2.0 |
+| 銀行デフォルト | -3.0 |
+
+---
+
+## タスクシステム
+
+### 8種のタスクタイプと効果
+
+| タイプ | 主担当 | 報酬 | 特殊効果 |
+|--------|--------|------|---------|
+| **standard** | Worker/Trader | 8〜20 EC | — |
+| **heavy** | Worker優先 | 25〜50 EC | RT 1.0 消費必須・完了でRT回収 |
+| **urgent** | 全役職 | 20〜35 EC | 15tick期限・前半完了で+2経験 |
+| **trade** | Trader優先 | 12〜28 EC | 完了でRT +0.5（Trader）/ +0.2（他） |
+| **security** | Guardian優先 | 10〜22 EC | 半径5の犯罪証拠を20%減衰 |
+| **survey** | Observer優先 | 5〜12 EC | 完了で+3経験値ボーナス |
+| **micro** | Worker | 2〜6 EC | 完了で半径3の隣接者にエネルギー+5 |
+| **construct** | Architect | 25〜45 EC | 建物Lv1を新設 |
+
+### 報酬スケーリング
+```
+最終報酬 = 基本報酬 × (1 + min(経験値/500, 0.20)) × (1 + min(TR/200, 0.10))
+```
+経験豊富・信頼度の高いエージェントほど高報酬を獲得できる。
+
+---
+
+## コアメカニクス
 
 ### Quantum Auction（量子入札）
-通常の「最高入札者が確実に勝つ」オークションとは異なる。
-
 ```
 P(当選) ∝ 入札額
 ```
+高い入札は有利だが確定ではない。SAVER や OPPORTUNIST が確率的に受注できる。
 
-高い入札は有利だが確定ではない。低い入札の SAVER や OPPORTUNIST が確率的に受注できる。**不確実性が戦略に組み込まれる。**
-
-### Memory Market（記憶売買）
-ロボットだけが持つ「経験の外部化」メカニクス。
+### 精神と時の部屋（チャンバー）
+経験値が蓄積した Worker がRT を消費して入室できる特別空間。  
+経験値 120 以上 かつ TR ≥ 3.0 で **天才覚醒** → **世界改変発明** が生まれる。
 
 ```
-高経験 Worker → Trader 買取 → 新人 Worker へ転売
+一時発明: duration tick で効果消滅
+永久技術: 世界に永遠に刻まれる
 ```
 
-- 高経験 Worker の `experience` 値を 0.4 EC/点 で Trader が買い取る
-- Trader は 1.6倍 のマージンで新人 Worker へ転売
-- 記憶を買った Worker は **8tick 間、入札に +1.5 EC ボーナス**
+部屋発見済み Worker は RT をオークション入札より部屋入室を優先する。
 
-### 累進資本課税
-Architect が建物を増やすほど課税率が上昇。資本の独占を抑制する。
+### 発明システム（7種）
 
-| 建物数 | 追加税率 |
-|--------|---------|
-| 1棟目 | 0% |
-| 2棟目 | +15% |
-| 3棟目 | +30% |
-| 4棟目以降 | +45%（上限）|
+| 発明タイプ | 効果 |
+|-----------|------|
+| jump_gate | 2地点間に瞬間移動口が出現 |
+| collective_consciousness | 全タスク報酬0.5%を最貧5体に毎tick還元 |
+| blind_dimension | 公安の検知能力が半減 |
+| crypto_reactor | HACK不可能化・SMUGGLE報酬3倍 |
+| entropy_reversal | 銀行利息5倍・維持費3倍 |
+| memory_flood | 全員のタスク完了経験値2倍 |
+| chaos_amplifier | タスク報酬1.8倍 |
 
-余剰税は `tax_pool` に還元 → Governor が `basic_income` で全員に再分配。
+### コンボ発明（創発）
+永久技術が2件以上蓄積されると100tick毎に「予期せぬ創発」が起きる。  
+永久技術が増えるほど合算シグネチャが上昇し、より多くのコンボ条件を満たせる複利構造。
 
-### 建物減価償却
-建物は **50tick で自然崩壊**。Architect は新しい建設タスクを取り続けないと収入が途絶える。建物セルを通過したエージェントはエネルギーを +0.3 回収（インフラ恩恵）。
+| コンボ | 必要軸 | 効果 |
+|--------|--------|------|
+| temporal_anchor | temporal強 | CHRONO滞在期間3倍 |
+| quantum_tunnel | temporal+chaos | 全建物間瞬間移動網 |
+| recursive_growth | economic | 80tick毎に建物自動Lvアップ |
+| time_crystal | temporal+social | 全員エネルギー毎tick+2自然回復 |
+| gift_economy | crime+political | HACK/SMUGGLEを合法化・課税 |
+| hive_mind | social | 最高経験値の知識20%が毎tick伝播 |
+| post_scarcity | economic | 維持費永久ゼロ |
+
+### 弾劾・クーデター
+```
+Worker 不満率 > 60% が3tick連続
+  → Governor 全員弾劾（残高40%没収・20tick権力空白）
+  → Guardian 支持率 >= 50% なら Worker がクーデター成功
+  → 反乱政府が40tick統治 → Worker に自動復帰
+```
+
+### 生産チェーン
+```
+GATHER タスク → Worker がリソースノードから採集 → resources 蓄積
+  → 隣接建物に搬入 → 加工収益（建物レベルで倍率変化）
+                        └─ 工業地区(NE): +50%ボーナス
+```
+
+建物の成長:
+```
+CONSTRUCT完了 → Lv1  →  UPGRADE完了 → Lv2  →  Lv3（最大）
+  （Lv別収入倍率: 1.0x / 1.5x / 2.2x）
+```
+
+### 株式市場
+- ARCH / TRAD / WORK 株を自動売買
+- 価格がクラッシュ閾値（~4 EC）に達すると強制リセット
+- 配当は保有株数に応じて毎tick支払い
+
+### 銀行システム
+- 残高 60 EC 以上で自動預金（8%確率）
+- 融資：残高 10 EC 未満に最大 25 EC 貸付（準備金から）
+- 利息は準備金から支払い（無制限創造なし）
+- デフォルト時残高没収 → 準備金へ
 
 ### 時空歪曲メカニクス
 
 | メカニクス | 説明 |
 |-----------|------|
-| **Temporal Loan** | 残高低下時に +15 EC 借入。15tick 後に 22 EC 返済義務 |
-| **Paradox Collapse** | 返済不能 → 残高ランダムリセット + 半径3の全員に ±6 EC ゆらぎ |
-| **Causality Loop** | タスク完了の10%確率で同種タスクが「過去から召喚」される |
-| **CHRONO Arrival** | 40〜80tick 毎に時間旅行者が登場。高経験値・高残高で出現 |
-| **CHRONO Departure** | 期限切れで消滅。残高40%を近隣3体に「時空遺産」として残す |
+| **Temporal Loan** | 残高低下時に EC 借入。期限後に利息付き返済 |
+| **Paradox Collapse** | 返済不能 → 残高ランダムリセット + 近隣に経済的ゆらぎ |
+| **Causality Loop** | タスク完了の10%確率で同種タスクが「過去から召喚」 |
+| **CHRONO Arrival** | 40〜80tick 毎に時間旅行者が登場 |
+| **CHRONO Departure** | 期限切れで消滅。残高を近隣に「時空遺産」として残す |
 
 ### CHRONO 正体発覚システム
-
-時間旅行者は**正体を悟られてはならない**。疑惑度が 15 を超えると正体発覚。
+疑惑度が 15 を超えると正体発覚。
 
 ```
 疑惑度上昇:
   + 2.5 落札するたびに（完璧すぎる入札が怪しまれる）
   + 2.5/tick AGGRESSIVE/VIGILANT Guardian が半径3以内
-  + 0.8/tick 通常Guardian が半径3以内
-  - 0.3/tick 自然減衰（目立たなければ疑惑は薄れる）
+  - 0.3/tick 自然減衰
 
-疑惑 > 8:   カモフラージュ発動 → 入札を意図的に 50〜80% まで下げる
-疑惑 ≥ 15:  TEMPORAL_EXPOSURE！
-  → 知識爆発（周囲に experience × 0.5 EC を分配）
-  → 残高60%を半径5以内に均等配布
-  → 大規模パラドックス波（半径3: ±15 EC、半径4-5: ±5 EC）
-  → エージェント即時消滅
+疑惑 > 8:   入札を意図的に 50〜80% まで下げてカモフラージュ
+疑惑 ≥ 15:  TEMPORAL_EXPOSURE → 知識爆発 + 残高60%放出 + 即時消滅
 ```
 
-**実際に確認された挙動（67agent / 200tick）:**
-- CHR1: tick 47 出現 → tick 63 正体発覚（16tick で捕捉）
-- CHR2: tick 123 出現 → tick 138 正体発覚（15tick で捕捉）  
-- CHR3: tick 192 出現 → 200tick まで生存（唯一の生還者）
+### 社会メカニクス
+
+| メカニクス | 説明 |
+|-----------|------|
+| **感情・暴動** | emotion_level < -5 で怒り → -8 で暴動・建物略奪 |
+| **死と転生** | エネルギー枯渇で死亡。次世代として経験継承し復活 |
+| **特性進化** | hustler→opportunist→explorer→hustler のサイクル進化 |
+| **同盟/ライバル** | 同盟相手にタスク報酬5%シェア。ライバル相手に入札10%増し |
+| **影の市場** | 賄賂でタスク担当者を買収（Observer が密告） |
+| **カルト** | 特定条件で信者集団が形成される |
 
 ---
 
@@ -141,15 +247,16 @@ Architect が建物を増やすほど課税率が上昇。資本の独占を抑�
 
 ```
 タスク報酬
-  └─ 5% 税収
+  └─ 課税（税率: デフォルト5%、Governor 政策で可変）
        ├─ 30% → Governor（KPIスコア×0.4〜1.3倍で調整）
        └─ 70% → tax_pool
                    ├─ Guardian/Observer パトロール給与
                    ├─ Architect 建物収入
-                   ├─ セーフティネット（残高15EC以下に5EC補助）
+                   ├─ セーフティネット（残高低下に補助）
                    └─ basic_income（Governor提案で全員均等分配）
 
 全エージェント: 維持費 0.2 EC/tick（ECシンク）
+逮捕没収: 被疑者残高60% → 銀行準備金へ
 ```
 
 ### Governor の政策提案（25tick毎）
@@ -160,9 +267,6 @@ Architect が建物を増やすほど課税率が上昇。資本の独占を抑�
 | Worker 稼働率 < 50% | `worker_support` | Worker 入札ボーナス +1.5 EC |
 | 税プール > 400 EC かつ Gini > 0.15 | `basic_income` | 全員均等分配 |
 | Gini > 0.30 かつ KPI > 0.6 | `tax_increase` | 税率 +2% |
-
-全 Governor が同一提案 → コンセンサスボーナス 1.5倍。  
-Governor の収入は KPI スコア（効率性 + 平等性）に連動 — **良い統治が自分の収入を増やす。**
 
 ---
 
@@ -189,7 +293,7 @@ allow_anonymous true
 
 ## 実行方法
 
-### スケールテスト（67体 / 200tick）
+### スケールテスト（106体 / 2000tick）
 ```bash
 python layer0/main_scale_test.py
 ```
@@ -228,18 +332,20 @@ final = replayer.final_state()
 hacs/
 ├── layer0/
 │   ├── core/
-│   │   ├── world.py          # 20×20 グリッドマップ・充電ステーション
-│   │   ├── agent.py          # Agent（experience / memory_boost 含む）
-│   │   ├── task.py           # Task / Bid / Quantum Auction
+│   │   ├── world.py          # 40×40 グリッドマップ・四地区・充電ステーション
+│   │   ├── agent.py          # Agent（EC / RT / TR / experience 含む）
+│   │   ├── task.py           # Task / Bid / Quantum Auction / タイプ別効果
 │   │   ├── economy.py        # 税プール・報酬・セーフティネット
 │   │   ├── policy.py         # PolicyEngine（制約・目標）
 │   │   ├── safety.py         # SafetyGate（夜間制限・緊急停止）
-│   │   ├── ai.py             # 7役職AI + Worker 11特性 + 全役職3種性格
+│   │   ├── ai.py             # 8役職AI + Worker 11特性 + 全役職3種性格
 │   │   └── event_sourcing.py # EventReplayer（イベントから状態再構築）
 │   ├── engine/
-│   │   └── simulator.py      # メインシミュレーター
+│   │   └── simulator.py      # メインシミュレーター（全メカニクス実装）
+│   ├── export/
+│   │   └── narrative_exporter.py  # 都市新聞（City Daily）自動生成
 │   └── schemas/
-│       ├── event.py          # Event / EventType（20種以上）
+│       ├── event.py          # Event / EventType（50種以上）
 │       ├── command.py        # Command / CommandAction
 │       └── state.py          # StateSnapshot
 ├── layer2/
@@ -259,15 +365,15 @@ hacs/
 
 ---
 
-## パフォーマンス（67体 / 200tick）
+## パフォーマンス（106体 / 2000tick）
 
 | 指標 | 値 |
 |------|-----|
-| 平均 tick 速度 | ~9ms/tick |
-| 最大 tick 時間 | ~38ms（< 50ms 合格）|
-| 総イベント数 | ~11,700件 |
-| 効率性スコア | 0.974 |
-| 平等性スコア | 0.776 |
+| 平均 tick 速度 | ~68ms/tick |
+| 最大 tick 時間 | ~1000ms（高負荷時） |
+| 総イベント数 | ~288,000件 |
+| 天才覚醒 | ~4〜10体 |
+| 永久技術 | ~8〜15件（うちコンボ7件） |
 | pytest | **132テスト全通過** |
 
 ---
@@ -275,38 +381,65 @@ hacs/
 ## 進捗ログ
 
 <!-- AUTO-UPDATED -->
-**最終更新: 2026-05-07**
+**最終更新: 2026-05-10**
 
 ### 実装済み
 
 **Layer0 コア**
-- [x] World / Agent / Task / Economy / Policy / Safety
-- [x] 7役職 AI（Worker / Guardian / Trader / Observer / Governor / Medic / Architect）
-- [x] Worker 5特性（HUSTLER / SAVER / SPECIALIST / EXPLORER / OPPORTUNIST）
-- [x] 8タスクタイプ（standard / heavy / urgent / trade / security / survey / micro / construct）
-- [x] Event Sourcing（EventReplayer — イベントログのみから状態完全再構築）
+- [x] World / Agent / Task / Economy / Policy / Safety（40×40四地区）
+- [x] 8役職 AI（Worker / Guardian / Trader / Observer / Governor / Medic / Architect / 公安）
+- [x] Worker 11特性 + 全役職3種性格
+- [x] 12タスクタイプ（standard / heavy / urgent / trade / security / survey / micro / construct / gather / upgrade / smuggle / hack）
+- [x] タスクタイプ別質的効果（SURVEY経験ボーナス / SECURITYパトロール / HEAVYリソース消費 / MICROコミュニティ）
+- [x] 経験値・TR連動報酬スケーリング
+- [x] Event Sourcing（EventReplayer）
 - [x] pytest 132テスト全通過
 
-**ロボット固有メカニクス**
-- [x] Quantum Auction — P(当選) ∝ 入札額
-- [x] Memory Market — Trader による経験値の売買・入札ボーナス
-- [x] 累進資本課税 — 建物棟数に応じて課税率増加
-- [x] 建物減価償却 — 50tick で自然崩壊
+**3通貨システム**
+- [x] EC（汎用経済クレジット）
+- [x] RT（Resource Token — 物理労働証明・Worker採集→Trader換算）
+- [x] TR（Trust Rating — 非売品・社会信頼指標）
+- [x] RT 市場（Worker→Trader 売却・マークアップ換算）
 
-**経済システム**
-- [x] 税プール + KPI連動 Governor 配当
-- [x] 維持費（EC シンク）/ セーフティネット / パトロール給与 / 基本所得
+**発明・文明システム**
+- [x] 精神と時の部屋（チャンバー — RT消費入室・天才覚醒）
+- [x] 天才発明7種（jump_gate / collective_consciousness / blind_dimension 他）
+- [x] コンボ発明7種（永久技術の合算シグネチャから創発）
+- [x] 発明効果の世界適用（HACK無効化 / 建物自動成長 / 維持費ゼロ 他）
+
+**統治・政治**
+- [x] Governor 25tick毎政策提案（reward_boost / worker_support / basic_income / tax_increase）
+- [x] 弾劾・クーデター（Worker集合投票→権力交代→反乱統治40tick）
+- [x] KPI連動税配当
+
+**経済インフラ**
+- [x] 銀行（預金・融資・利息・デフォルト — 準備金制約あり）
+- [x] 株式市場（ARCH/TRAD/WORK 自動売買・クラッシュ・配当）
+- [x] 生産チェーン（採集→加工→建物成長 + 工業地区NE 1.5倍ボーナス）
+- [x] 累進資本課税・建物減価償却
+
+**社会・治安**
+- [x] ブラックマーケット（SMUGGLE / HACK 違法タスク）
+- [x] 公安潜入・証拠蓄積・逮捕（没収→銀行準備金）
+- [x] 感情システム・暴動・建物略奪
+- [x] 死と転生（経験継承）・特性進化サイクル
+- [x] 同盟・ライバル関係
+- [x] 影の市場（賄賂）・Observer 密告
+
+**時空メカニクス**
+- [x] CHRONO 時間旅行者（出現・正体発覚・消滅・時空遺産）
+- [x] Temporal Loan / Paradox Collapse / Causality Loop
 
 **Layer2 / Layer3**
 - [x] MQTT Event Bus（Mosquitto + paho-mqtt + WebSocket）
 - [x] リアルタイムライブビューア
 - [x] City OS（CityOS / AlertSystem / StateManager / CommandDispatcher / PolicyGate）
+- [x] 都市新聞（City Daily）ナラティブ自動生成
 
 ### 検討中
-- [ ] エージェント寿命と相続（死→遺産引き継ぎで再起動）
-- [ ] ブラックマーケット（高報酬違法タスク、Guardianに捕捉リスク）
-- [ ] Governor 弾劾とクーデター（Worker 集合投票で権力交代）
-- [ ] 感染バグとパンデミック（Medic が唯一の治療手段）
+- [ ] 商社役職（地区間大口卸・Worker融資・Architect建設前払い）
+- [ ] カルト活性化（現在0件 — トリガー条件の調整）
+- [ ] 効率性スコア修正（常に0.000 — 計算式のバグ）
 - [ ] Layer1: 物理接続（Raspberry Pi / ESP32）
 - [ ] デジタルツイン（高品質 3D 可視化）
 <!-- /AUTO-UPDATED -->
