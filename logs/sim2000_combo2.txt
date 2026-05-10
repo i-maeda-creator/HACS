@@ -1,0 +1,46 @@
+=== HACS Scale Test — 四地区版 ===
+  グリッド : 40×40（四地区: 下町/工業/治安/商業）
+  エージェント : 106体 (Worker×60 / Guardian×12 / Trader×8 / Observer×8 / Governor×4 / Medic×6 / Architect×4 / 公安×4)
+  Ticks  : 2000
+
+  同盟ペア: 10組  ライバルペア: 8組
+
+  tick   50 | agents=107 | events=  4809 | avg 36.88ms/tick
+  tick  100 | agents=106 | events= 11135 | avg 21.37ms/tick
+  tick  150 | agents=107 | events= 18492 | avg 20.55ms/tick
+  tick  200 | agents=106 | events= 26614 | avg 21.29ms/tick
+  tick  250 | agents=106 | events= 36007 | avg 22.49ms/tick
+  tick  300 | agents=107 | events= 46206 | avg 22.87ms/tick
+  tick  350 | agents=106 | events= 57144 | avg 22.29ms/tick
+  tick  400 | agents=106 | events= 68404 | avg 28.55ms/tick
+  tick  450 | agents=107 | events= 80234 | avg 36.78ms/tick
+  tick  500 | agents=107 | events= 92059 | avg 33.06ms/tick
+  tick  550 | agents=107 | events=104112 | avg 80.27ms/tick
+  tick  600 | agents=106 | events=116177 | avg 51.30ms/tick
+  tick  650 | agents=107 | events=128740 | avg 107.12ms/tick
+  tick  700 | agents=107 | events=141469 | avg 62.85ms/tick
+  tick  750 | agents=107 | events=154232 | avg 47.20ms/tick
+  tick  800 | agents=107 | events=167011 | avg 46.20ms/tick
+  tick  850 | agents=107 | events=179851 | avg 42.32ms/tick
+  tick  900 | agents=108 | events=193024 | avg 42.00ms/tick
+  tick  950 | agents=106 | events=206025 | avg 51.56ms/tick
+  tick 1000 | agents=107 | events=219062 | avg 45.62ms/tick
+  tick 1050 | agents=106 | events=232185 | avg 54.74ms/tick
+  tick 1100 | agents=105 | events=245399 | avg 60.77ms/tick
+  tick 1150 | agents=105 | events=258765 | avg 83.03ms/tick
+  tick 1200 | agents=105 | events=272081 | avg 67.95ms/tick
+  tick 1250 | agents=105 | events=285578 | avg 74.78ms/tick
+  tick 1300 | agents=105 | events=298974 | avg 78.87ms/tick
+  tick 1350 | agents=106 | events=312497 | avg 112.83ms/tick
+  tick 1400 | agents=106 | events=325934 | avg 76.59ms/tick
+  tick 1450 | agents=106 | events=339552 | avg 78.85ms/tick
+  tick 1500 | agents=105 | events=353070 | avg 96.87ms/tick
+Traceback (most recent call last):
+  File "<string>", line 5, in <module>
+  File "<string>", line 533, in <module>
+  File "<string>", line 143, in main
+  File ".\layer0\engine\simulator.py", line 255, in step
+    self._process_illegal_completions()
+  File ".\layer0\engine\simulator.py", line 1012, in _process_illegal_completions
+    tax_rate = self.economy.current_tax_rate
+AttributeError: 'Economy' object has no attribute 'current_tax_rate'

@@ -285,7 +285,9 @@ def main():
 
     from collections import Counter
     type_counts  = Counter(e.payload.get("task_type", "?") for e in created_events)
-    type_done    = Counter(t.task_type.value for t in sim.tasks if t.status.value == "completed")
+    # 完了済みタスクは50tickごとにsim.tasksから削除されるためイベントログから集計
+    completed_events = [e for e in sim.event_log if e.event_type.value == "TaskCompleted"]
+    type_done    = Counter(e.payload.get("task_type", "?") for e in completed_events)
     type_expired = Counter(t.task_type.value for t in sim.tasks if t.status.value == "expired")
     print(f"\n  {'Type':10s}  {'生成':>5}  {'完了':>5}  {'期限切':>5}  完了率")
     print(f"  {'-'*45}")

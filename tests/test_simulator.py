@@ -86,7 +86,7 @@ def test_observer_bids_on_survey_only(sim):
 def test_worker_earns_balance(sim):
     initial = {a.agent_id: a.balance for a in sim.agents}
     sim.run(100)
-    workers = [a for a in sim.agents if a.role == AgentRole.WORKER]
+    workers = [a for a in sim.agents if a.role == AgentRole.WORKER and a.agent_id in initial]
     earned = sum(a.balance - initial[a.agent_id] for a in workers)
     assert earned > 0
 

@@ -1,0 +1,521 @@
+=== HACS Scale Test — 四地区版 ===
+  グリッド : 40×40（四地区: 下町/工業/治安/商業）
+  エージェント : 106体 (Worker×60 / Guardian×12 / Trader×8 / Observer×8 / Governor×4 / Medic×6 / Architect×4 / 公安×4)
+  Ticks  : 2000
+
+  同盟ペア: 10組  ライバルペア: 8組
+
+  tick   50 | agents=107 | events=  4809 | avg 16.22ms/tick
+  tick  100 | agents=106 | events= 11135 | avg 16.22ms/tick
+  tick  150 | agents=107 | events= 18492 | avg 18.65ms/tick
+  tick  200 | agents=106 | events= 26614 | avg 18.68ms/tick
+  tick  250 | agents=106 | events= 36007 | avg 20.33ms/tick
+  tick  300 | agents=107 | events= 46205 | avg 20.42ms/tick
+  tick  350 | agents=107 | events= 56954 | avg 18.88ms/tick
+  tick  400 | agents=106 | events= 67741 | avg 22.27ms/tick
+  tick  450 | agents=106 | events= 79039 | avg 24.73ms/tick
+  tick  500 | agents=107 | events= 90102 | avg 22.93ms/tick
+  tick  550 | agents=106 | events=101092 | avg 28.71ms/tick
+  tick  600 | agents=106 | events=112157 | avg 27.99ms/tick
+  tick  650 | agents=107 | events=123697 | avg 35.36ms/tick
+  tick  700 | agents=107 | events=135757 | avg 32.93ms/tick
+  tick  750 | agents=106 | events=147915 | avg 35.24ms/tick
+  tick  800 | agents=107 | events=160008 | avg 44.35ms/tick
+  tick  850 | agents=106 | events=172277 | avg 40.80ms/tick
+  tick  900 | agents=106 | events=184579 | avg 41.90ms/tick
+  tick  950 | agents=106 | events=196998 | avg 52.97ms/tick
+  tick 1000 | agents=107 | events=209443 | avg 47.50ms/tick
+  tick 1050 | agents=106 | events=221956 | avg 48.91ms/tick
+  tick 1100 | agents=105 | events=234511 | avg 49.91ms/tick
+  tick 1150 | agents=106 | events=247042 | avg 63.23ms/tick
+  tick 1200 | agents=106 | events=259703 | avg 55.89ms/tick
+  tick 1250 | agents=106 | events=272279 | avg 56.93ms/tick
+  tick 1300 | agents=105 | events=284950 | avg 61.90ms/tick
+  tick 1350 | agents=105 | events=297686 | avg 75.15ms/tick
+  tick 1400 | agents=105 | events=310409 | avg 67.03ms/tick
+  tick 1450 | agents=105 | events=323276 | avg 81.93ms/tick
+  tick 1500 | agents=105 | events=336002 | avg 70.76ms/tick
+  tick 1550 | agents=105 | events=348889 | avg 74.11ms/tick
+  tick 1600 | agents=105 | events=361710 | avg 93.19ms/tick
+  tick 1650 | agents=105 | events=374618 | avg 80.73ms/tick
+  tick 1700 | agents=105 | events=387496 | avg 84.71ms/tick
+  tick 1750 | agents=106 | events=400354 | avg 86.59ms/tick
+  tick 1800 | agents=105 | events=413193 | avg 98.78ms/tick
+  tick 1850 | agents=105 | events=426109 | avg 94.49ms/tick
+  tick 1900 | agents=105 | events=438997 | avg 115.19ms/tick
+  tick 1950 | agents=105 | events=451878 | avg 98.33ms/tick
+  tick 2000 | agents=105 | events=464740 | avg 107.14ms/tick
+
+=== 結果 ===
+  実行時間       : 107.61s
+  平均 tick 速度 : 53.80ms/tick
+  総イベント数   : 464740
+  Safety 違反    : 981
+  Policy 違反    : 2630
+
+  効率性   : 0.000
+  平等性   : 0.306
+  税プール : 17605007255731.6 EC
+
+  役職別残高（平均）:
+    Architect : avg=7316249793436.0 EC  n=4
+    Governor  : avg=1657862964442.2 EC  n=4
+    Guardian  : avg=19365759581499.0 EC  n=12
+    Medic     : avg=12016254998405.0 EC  n=6
+    Observer  : avg=11619862095245.1 EC  n=8
+    Trader    : avg=2968224440517.5 EC  n=8
+    Worker    : avg=11295769176388.3 EC  n=63
+
+=== 地区別統計 ===
+  下町 (NW)       :  39体  avg残高=10278424044385.7 EC  avg活力=85  怒り=0体
+  工業 (NE)       :  25体  avg残高=11593020027800.0 EC  avg活力=99  怒り=0体
+  治安 (SW)       :  28体  avg残高=12899647491287.1 EC  avg活力=98  怒り=0体
+  商業 (SE)       :  13体  avg残高=8988236785878.0 EC  avg活力=100  怒り=0体
+
+=== 感情・暴動 ===
+  neutral : 105体  ████████████████████████████████████████
+  暴動発生: 4回
+
+=== 死と転生 ===
+  死亡: 5件  転生: 5件
+  最大世代: 2世代
+  転生例（最初の3件）:
+    tick=309  W48  世代1  継承経験72
+    tick=393  W23  世代1  継承経験1
+    tick=480  W48  世代2  継承経験57
+
+=== カルト ===
+  カルト結成: 0組  加入: 0件  解散: 0件
+
+=== 影の市場 ===
+  賄賂成立: 1702件
+  総賄賂額: 9455.5 EC
+
+=== 特性進化 ===
+  進化件数: 2050件
+    hustler→opportunist: 679件
+    opportunist→explorer: 670件
+    explorer→hustler: 666件
+    nihilist→drifter: 10件
+    specialist→hustler: 9件
+
+=== 銀行 ===
+  預金: 114件  融資: 75件  デフォルト: 21件
+  銀行準備金残高: 593163221427479.5 EC
+  現在の預金残高合計: 1186326449349374.2 EC  (114口座)
+
+=== 株式市場 ===
+  購入: 1928件  売却: 4件  配当: 733件  クラッシュ: 51件
+  ARCH: 価格=12.85  保有者=12人  総株数=24996株
+  TRAD: 価格=5.53  保有者=12人  総株数=26878株
+  WORK: 価格=5.68  保有者=12人  総株数=25740株
+
+=== オークション詳細 ===
+  タスク数: 4006  総入札数: 7627  競争率: 1.9x  期限切れ: 0
+
+  Type           生成     完了    期限切  完了率
+  ---------------------------------------------
+  standard      181      0      0  0%
+  heavy          83      0      0  0%
+  urgent        107      0      0  0%
+  trade         106      0      0  0%
+  security       63      0      0  0%
+  survey         79      0      0  0%
+  micro         110      0      0  0%
+  construct      68      0      0  0%
+
+  Worker 受注状況: 47/63体が受注 (75%)
+
+  Worker特性   体数  入札  勝利  勝率    avg獲得EC
+  ----------------------------------------------------
+  ?              3   185     8    4.3%      17.9 EC
+  探索者            6   480    26    5.4%      37.5 EC
+  時間旅行者          2   175    12    6.9%      43.7 EC
+  機会主義者         13   953    51    5.4%      34.4 EC
+  漂流者           20  2066    98    4.7%      37.0 EC
+  稼ぎ師            7   708    41    5.8%      41.3 EC
+  節約家           12   750   117   15.6%     105.1 EC
+
+=== 経済循環 ===
+  維持費      : 42344.4 EC
+  Medic治療費 : 5920.0 EC  (499件)
+  パトロール  : 8385.1 EC
+  建物収入    : 117330.4 EC  (21棟)
+  セーフティ  : 9290.0 EC  (1858件)
+  統治報酬    : 1430.6 EC
+  基本所得    : 27048.0 EC
+  税プール    : 17605007255731.6 EC
+
+=== 闇市 / 公安 ===
+  闇市タスク  : 生成108件  完了14件（HACK7件）
+  HACK窃取    : 56.6 EC
+  逮捕        : 52件  没収17605007376332.2 EC
+  密告        : 162件
+  現役公安    : ['K1', 'K2', 'K3']
+
+=== Governor ===
+  投票: 230件  可決: 72件
+    tick= 25  reward_boost      voters=['V1', 'V4']
+    tick=100  worker_support    voters=['V1', 'V4']
+    tick=125  reward_boost      voters=['V1', 'V4']
+    tick=150  basic_income      voters=['V1', 'V2', 'V4']
+    tick=175  reward_boost      voters=['V1', 'V4']
+
+=== 弾劾・クーデター ===
+  弾劾成立    : 4件
+    tick 42: V1 弾劾 — 19.9EC没収
+    tick 42: V2 弾劾 — 16.7EC没収
+    tick 42: V3 弾劾 — 16.7EC没収
+    tick 42: V4 弾劾 — 19.9EC没収
+  クーデター成功: 1件
+    tick 46: W10 反乱政府樹立 (Guardian支持 6/12)
+  クーデター失敗: 0件
+  反乱統治終了  : 1件
+  最大弾劾圧力  : 3tick連続  最大不満率: 71.7%
+
+=== 精神と時の部屋 ===
+  入室: 23件  退室: 20件
+  天才覚醒: 8体  世界改変発明: 8件
+    tick173: W34 覚醒 — 経験92 → 【W34の死角次元（tick173）】
+    tick214: W50 覚醒 — 経験93 → 【W50の時間跳躍ゲート（tick214）】
+    tick214: K4 覚醒 — 経験138 → 【K4の集合意識体（tick214）】
+    tick281: W33 覚醒 — 経験94 → 【W33の死角次元（tick281）】
+    tick298: W48 覚醒 — 経験94 → 【W48の量子暗号炉（tick298）】
+    tick1015: W07 覚醒 — 経験90 → 【W07の時間跳躍ゲート（tick1015）】
+    tick1042: W29 覚醒 — 経験97 → 【W29の時間跳躍ゲート（tick1042）】
+    tick1068: W20 覚醒 — 経験96 → 【W20の時間跳躍ゲート（tick1068）】
+    発明種別: blind_dimension  有効期限: tick218
+    発明種別: jump_gate  有効期限: tickNone
+    発明種別: collective_consciousness  有効期限: tickNone
+    発明種別: blind_dimension  有効期限: tickNone
+    発明種別: crypto_reactor  有効期限: tickNone
+    発明種別: jump_gate  有効期限: tickNone
+    発明種別: jump_gate  有効期限: tickNone
+    発明種別: jump_gate  有効期限: tickNone
+  永久技術: 7件
+    ◆ 〈W50の時間跳躍ゲート（tick214）〉
+    ◆ 〈K4の集合意識体（tick214）〉
+    ◆ 〈W33の死角次元（tick281）〉
+    ◆ 〈W48の量子暗号炉（tick298）〉
+    ◆ 〈W07の時間跳躍ゲート（tick1015）〉
+    ◆ 〈W29の時間跳躍ゲート（tick1042）〉
+    ◆ 〈W20の時間跳躍ゲート（tick1068）〉
+  現在の部屋座標: (18, 15)
+  累計天才数: 8体
+
+=== 生産チェーン ===
+  リソースノード出現: 147件
+  採集: 157件  合計 341単位
+  加工収益: 45件  合計 884.2EC
+  建物レベルアップ: 29件
+  現存建物数: 21棟
+    Lv1: 5棟
+    Lv2: 3棟
+    Lv3: 13棟
+
+=== 時空歪曲 ===
+  CHRONO到来: 27件  正体発覚: 7件
+  パラドックス崩壊: 3109件
+
+=== 複数通貨 (RT / TR) ===
+  RT獲得: 2123.5  RT消費: 200.4  RT両替: 920.7件=160
+  TR変動イベント: 1369件
+    arrested            : -260.0
+    bank_default        : -63.0
+    riot                : -40.0
+    chrono_survived     : +105.0
+    policy_passed       : +528.0
+    task_completed      : +709.0
+    healing             : +998.0
+
+  役職別 RT/TR 平均:
+    Architect : avg RT=  0.0  avg TR= +5.2  n=4
+    Governor  : avg RT=  0.0  avg TR=+132.0  n=4
+    Guardian  : avg RT=  0.0  avg TR=+12.3  n=12
+    Medic     : avg RT=  0.0  avg TR=+165.3  n=6
+    Observer  : avg RT=  0.0  avg TR=+16.0  n=8
+    Trader    : avg RT=  0.0  avg TR= +2.6  n=8
+    Worker    : avg RT=  4.3  avg TR= +0.1  n=63
+
+  TR トップ5:
+    M1 (Medic   ): TR=+556.0  EC=21005187090387.3  RT=0.0
+    M2 (Medic   ): TR=+242.0  EC=33554605446386.0  RT=0.0
+    V1 (Governor): TR=+216.0  EC=4364197019634.8  RT=0.0
+    V4 (Governor): TR=+216.0  EC=2266723198876.6  RT=0.0
+    V2 (Governor): TR=+96.0  EC=531639225.3  RT=0.0
+  TR ボトム5:
+    W17 (Worker  ): TR=-8.0  EC=37.3  RT=0.0
+    W42 (Worker  ): TR=-8.0  EC=564440999711.7  RT=0.0
+    W31 (Worker  ): TR=-40.0  EC=15006984638165.8  RT=2.3
+    W40 (Worker  ): TR=-49.0  EC=53138149737797.1  RT=0.0
+    W05 (Worker  ): TR=-137.0  EC=25.3  RT=0.0
+
+=== パフォーマンス ===
+  平均 tick: 53.80ms  最大 tick: 1075.20ms
+  判定: 要最適化 (> 200ms)
+
+ログ保存: logs/scale_test_events.jsonl
+
+============================================================
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  HACS CITY DAILY  ―  全2000tick号外
+  総イベント数: 464,740件   発行: HACS観察局
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【速報】
+  ★ tick 46: クーデター成功 — W10が反乱政府を樹立
+           Guardian 6/12体の支持を獲得
+  ★ tick 42: Governor V1 弾劾 — 19.9EC没収、権力空白20tick
+  ★ tick 42: Governor V2 弾劾 — 16.7EC没収、権力空白20tick
+  ★ tick 42: Governor V3 弾劾 — 16.7EC没収、権力空白20tick
+  ★ tick 42: Governor V4 弾劾 — 19.9EC没収、権力空白20tick
+  ⚡ 暴動 4回発生（建物破壊・略奪あり）
+  ▼ 株式市場クラッシュ 51回: TRAD, ARCH, ARCH, TRAD, TRAD, ARCH, TRAD, TRAD, TRAD, TRAD, TRAD, TRAD, TRAD, TRAD, TRAD, TRAD, WORK, ARCH, WORK, TRAD, TRAD, ARCH, TRAD, ARCH, WORK, ARCH, WORK, WORK, ARCH, ARCH, TRAD, ARCH, ARCH, TRAD, TRAD, ARCH, ARCH, TRAD, TRAD, WORK, ARCH, ARCH, ARCH, ARCH, ARCH, TRAD, TRAD, ARCH, WORK, WORK, TRAD
+
+【政治】
+  政策「reward_boost」可決 39回 (tick 25, 125, 175...)
+  政策「worker_support」可決 1回 (tick 100)
+  政策「basic_income」可決 32回 (tick 150, 200, 250...)
+  弾劾圧力: 最大3tick連続（閾値3）
+  Worker最大不満率: 71.7%
+  反乱政府 W10 が任期40tick終了 → Worker復帰
+  退任時残高: 33.6EC
+
+【事件・治安】
+  公安逮捕 52件 / 没収総額 17605007376332.2EC
+    tick 40: W15 逮捕 — 22.1EC没収 / 15tick停止
+    tick 53: W14 逮捕 — 18.1EC没収 / 15tick停止
+    tick 70: W05 逮捕 — 11.8EC没収 / 15tick停止
+    ...他 49件
+  HACKハッキング: 7件 / 窃取総額 56.6EC
+  SMUGGLE密輸: 7件完了
+  影の市場（賄賂）: 1702件 / 総額 9455.5EC
+  Observer密告: 162件
+
+【時空・未来人】
+  CHRONO到来: 27体
+    tick 47: CHR1 出現 — 残高51EC / 経験39
+    tick129: CHR2 出現 — 残高51EC / 経験44
+    tick209: CHR3 出現 — 残高84EC / 経験25
+    tick273: CHR4 出現 — 残高60EC / 経験38
+    tick332: CHR5 出現 — 残高58EC / 経験30
+    tick403: CHR6 出現 — 残高85EC / 経験50
+    tick489: CHR7 出現 — 残高64EC / 経験50
+    tick579: CHR8 出現 — 残高70EC / 経験33
+    tick639: CHR9 出現 — 残高63EC / 経験32
+    tick697: CHR10 出現 — 残高82EC / 経験39
+    tick790: CHR11 出現 — 残高65EC / 経験38
+    tick857: CHR12 出現 — 残高70EC / 経験48
+    tick911: CHR13 出現 — 残高90EC / 経験47
+    tick971: CHR14 出現 — 残高61EC / 経験25
+    tick1033: CHR15 出現 — 残高58EC / 経験44
+    tick1127: CHR16 出現 — 残高75EC / 経験47
+    tick1183: CHR17 出現 — 残高59EC / 経験49
+    tick1250: CHR18 出現 — 残高82EC / 経験45
+    tick1321: CHR19 出現 — 残高82EC / 経験25
+    tick1416: CHR20 出現 — 残高76EC / 経験41
+    tick1515: CHR21 出現 — 残高72EC / 経験35
+    tick1606: CHR22 出現 — 残高74EC / 経験36
+    tick1664: CHR23 出現 — 残高89EC / 経験23
+    tick1735: CHR24 出現 — 残高62EC / 経験20
+    tick1807: CHR25 出現 — 残高70EC / 経験37
+    tick1875: CHR26 出現 — 残高80EC / 経験28
+    tick1970: CHR27 出現 — 残高58EC / 経験36
+  正体発覚（TEMPORAL_EXPOSURE）: 7件
+    tick504: CHR7 発覚 — 半径5の10体に知識爆発 / 残高60%放出
+    tick593: CHR8 発覚 — 半径5の15体に知識爆発 / 残高60%放出
+    tick1274: CHR18 発覚 — 半径5の15体に知識爆発 / 残高60%放出
+    tick1329: CHR19 発覚 — 半径5の11体に知識爆発 / 残高60%放出
+    tick1629: CHR22 発覚 — 半径5の15体に知識爆発 / 残高60%放出
+    tick1766: CHR24 発覚 — 半径5の2体に知識爆発 / 残高60%放出
+    tick1884: CHR26 発覚 — 半径5の19体に知識爆発 / 残高60%放出
+  CHRONO消滅: 21体 / 時空遺産総計 12378097.8EC
+  パラドックス崩壊: 3109件
+  時間ローン借入: 1163件
+
+【経済】
+  タスク完了: 580件 / 総報酬 8146.2EC
+    tick318: W39 が 61.1EC 獲得
+    tick153: W44 が 51.9EC 獲得
+    tick234: W03 が 46.7EC 獲得
+  銀行預金: 114件
+  銀行融資: 75件
+  銀行デフォルト: 21件 ⚠
+  基本所得分配: 32回 / 累計 256.0EC
+  維持費徴収: 2000回
+
+【複数通貨経済 — RT・TR レポート】
+  RT獲得: 157件 / 合計 2123.5 RT
+  RT消費: 23件 / 合計 200.4 RT
+  RT両替仲介: 160件 / 合計 920.7 RT
+  TR変動: +2340.0 / -363.0  （1369件）
+    task_completed: 580件
+    healing: 499件
+    policy_passed: 176件
+    arrested: 52件
+    chrono_survived: 21件
+
+【社会・文化】
+  特性進化: 計2050件
+    hustler→opportunist: 679件
+    opportunist→explorer: 670件
+    explorer→hustler: 666件
+    nihilist→drifter: 10件
+  Medic治療: 499件 / 合計 9980エネルギー回復
+  建物建設: 21棟
+
+【株式市場】
+  購入 1928件 / 売却 4件 / 配当 733件
+    ARCH: 24997株購入
+    TRAD: 26879株購入
+    WORK: 25742株購入
+  配当総額: 564801.32EC
+  ⚠ tick 25: TRADクラッシュ (価格3.88EC → 強制リセット)
+  ⚠ tick190: ARCHクラッシュ (価格3.80EC → 強制リセット)
+  ⚠ tick213: ARCHクラッシュ (価格3.85EC → 強制リセット)
+  ⚠ tick306: TRADクラッシュ (価格3.28EC → 強制リセット)
+  ⚠ tick311: TRADクラッシュ (価格3.45EC → 強制リセット)
+  ⚠ tick321: ARCHクラッシュ (価格3.96EC → 強制リセット)
+  ⚠ tick322: TRADクラッシュ (価格2.98EC → 強制リセット)
+  ⚠ tick332: TRADクラッシュ (価格3.94EC → 強制リセット)
+  ⚠ tick374: TRADクラッシュ (価格3.82EC → 強制リセット)
+  ⚠ tick502: TRADクラッシュ (価格3.57EC → 強制リセット)
+  ⚠ tick539: TRADクラッシュ (価格3.98EC → 強制リセット)
+  ⚠ tick549: TRADクラッシュ (価格2.85EC → 強制リセット)
+  ⚠ tick583: TRADクラッシュ (価格3.81EC → 強制リセット)
+  ⚠ tick602: TRADクラッシュ (価格3.78EC → 強制リセット)
+  ⚠ tick605: TRADクラッシュ (価格4.00EC → 強制リセット)
+  ⚠ tick742: TRADクラッシュ (価格3.87EC → 強制リセット)
+  ⚠ tick831: WORKクラッシュ (価格4.00EC → 強制リセット)
+  ⚠ tick1005: ARCHクラッシュ (価格3.73EC → 強制リセット)
+  ⚠ tick1006: WORKクラッシュ (価格3.92EC → 強制リセット)
+  ⚠ tick1014: TRADクラッシュ (価格3.99EC → 強制リセット)
+  ⚠ tick1043: TRADクラッシュ (価格2.99EC → 強制リセット)
+  ⚠ tick1069: ARCHクラッシュ (価格3.34EC → 強制リセット)
+  ⚠ tick1090: TRADクラッシュ (価格3.97EC → 強制リセット)
+  ⚠ tick1091: ARCHクラッシュ (価格3.97EC → 強制リセット)
+  ⚠ tick1114: WORKクラッシュ (価格3.97EC → 強制リセット)
+  ⚠ tick1115: ARCHクラッシュ (価格3.93EC → 強制リセット)
+  ⚠ tick1248: WORKクラッシュ (価格3.85EC → 強制リセット)
+  ⚠ tick1260: WORKクラッシュ (価格3.84EC → 強制リセット)
+  ⚠ tick1262: ARCHクラッシュ (価格3.71EC → 強制リセット)
+  ⚠ tick1302: ARCHクラッシュ (価格3.82EC → 強制リセット)
+  ⚠ tick1316: TRADクラッシュ (価格3.39EC → 強制リセット)
+  ⚠ tick1331: ARCHクラッシュ (価格3.75EC → 強制リセット)
+  ⚠ tick1352: ARCHクラッシュ (価格3.98EC → 強制リセット)
+  ⚠ tick1353: TRADクラッシュ (価格3.92EC → 強制リセット)
+  ⚠ tick1364: TRADクラッシュ (価格3.81EC → 強制リセット)
+  ⚠ tick1374: ARCHクラッシュ (価格3.66EC → 強制リセット)
+  ⚠ tick1381: ARCHクラッシュ (価格3.38EC → 強制リセット)
+  ⚠ tick1509: TRADクラッシュ (価格3.51EC → 強制リセット)
+  ⚠ tick1519: TRADクラッシュ (価格3.00EC → 強制リセット)
+  ⚠ tick1535: WORKクラッシュ (価格3.92EC → 強制リセット)
+  ⚠ tick1537: ARCHクラッシュ (価格3.74EC → 強制リセット)
+  ⚠ tick1553: ARCHクラッシュ (価格3.69EC → 強制リセット)
+  ⚠ tick1625: ARCHクラッシュ (価格3.62EC → 強制リセット)
+  ⚠ tick1638: ARCHクラッシュ (価格3.82EC → 強制リセット)
+  ⚠ tick1647: ARCHクラッシュ (価格3.81EC → 強制リセット)
+  ⚠ tick1671: TRADクラッシュ (価格3.97EC → 強制リセット)
+  ⚠ tick1674: TRADクラッシュ (価格3.98EC → 強制リセット)
+  ⚠ tick1773: ARCHクラッシュ (価格3.98EC → 強制リセット)
+  ⚠ tick1783: WORKクラッシュ (価格3.96EC → 強制リセット)
+  ⚠ tick1805: WORKクラッシュ (価格3.91EC → 強制リセット)
+  ⚠ tick1986: TRADクラッシュ (価格3.85EC → 強制リセット)
+
+【生産チェーン / 都市成長】
+  リソースノード出現: 147件
+  採集: 157件 / 合計 341単位
+  加工・売却: 45件 / 合計収益 884.2EC
+  建物レベルアップ: 29件
+    tick119: 建物(6,9) → Lv2
+    tick142: 建物(6,6) → Lv2
+    tick155: 建物(4,16) → Lv2
+    tick169: 建物(26,17) → Lv2
+    tick208: 建物(6,9) → Lv3
+    tick272: 建物(19,3) → Lv2
+    tick279: 建物(4,16) → Lv3
+    tick289: 建物(26,17) → Lv3
+    tick290: 建物(27,31) → Lv2
+    tick292: 建物(8,1) → Lv2
+    tick299: 建物(31,12) → Lv2
+    tick314: 建物(20,8) → Lv2
+    tick324: 建物(14,1) → Lv2
+    tick340: 建物(22,35) → Lv2
+    tick342: 建物(21,33) → Lv2
+    tick372: 建物(19,3) → Lv3
+    tick373: 建物(13,5) → Lv2
+    tick378: 建物(27,31) → Lv3
+    tick380: 建物(8,1) → Lv3
+    tick386: 建物(31,12) → Lv3
+    tick407: 建物(14,1) → Lv3
+    tick424: 建物(20,8) → Lv3
+    tick430: 建物(21,33) → Lv3
+    tick433: 建物(22,35) → Lv3
+    tick451: 建物(14,4) → Lv2
+    tick476: 建物(11,25) → Lv2
+    tick657: 建物(31,24) → Lv2
+    tick1022: 建物(14,4) → Lv3
+    tick1214: 建物(31,24) → Lv3
+
+【精神と時の部屋 / 天才発明 / 永久技術】
+  精神と時の部屋: 30回移動
+  入室者: 23体
+  退室者: 20体 / 平均経験値獲得 80
+
+  ★ 天才覚醒: 8体
+    tick173: W34 覚醒（経験値92）（有効期限: tick?）
+           発明: 【W34の死角次元（tick173）】 種別: blind_dimension
+    tick214: W50 覚醒（経験値93）【永久技術】
+           発明: 【W50の時間跳躍ゲート（tick214）】 種別: jump_gate
+    tick214: K4 覚醒（経験値138）【永久技術】
+           発明: 【K4の集合意識体（tick214）】 種別: collective_consciousness
+    tick281: W33 覚醒（経験値94）【永久技術】
+           発明: 【W33の死角次元（tick281）】 種別: blind_dimension
+    tick298: W48 覚醒（経験値94）【永久技術】
+           発明: 【W48の量子暗号炉（tick298）】 種別: crypto_reactor
+    tick1015: W07 覚醒（経験値90）【永久技術】
+           発明: 【W07の時間跳躍ゲート（tick1015）】 種別: jump_gate
+    tick1042: W29 覚醒（経験値97）【永久技術】
+           発明: 【W29の時間跳躍ゲート（tick1042）】 種別: jump_gate
+    tick1068: W20 覚醒（経験値96）【永久技術】
+           発明: 【W20の時間跳躍ゲート（tick1068）】 種別: jump_gate
+
+  ◆ 永久技術として刻まれた発明: 7件
+    tick214: 〈W50の時間跳躍ゲート（tick214）〉 永久技術化
+    tick214: 〈K4の集合意識体（tick214）〉 永久技術化
+    tick281: 〈W33の死角次元（tick281）〉 永久技術化
+    tick298: 〈W48の量子暗号炉（tick298）〉 永久技術化
+    tick1015: 〈W07の時間跳躍ゲート（tick1015）〉 永久技術化
+    tick1042: 〈W29の時間跳躍ゲート（tick1042）〉 永久技術化
+    tick1068: 〈W20の時間跳躍ゲート（tick1068）〉 永久技術化
+
+  世界改変発明（一時）: 8件
+    〈W34の死角次元（tick173）〉 有効期限: tick218
+     公安の感知能力が半減する隠れ空間が出現。すべてのエージェントが薄い影に守られる。
+    〈W50の時間跳躍ゲート（tick214）〉 有効期限: tickNone
+     二つの地点間に瞬間移動口が出現。片方に踏み込むとゼロコストで対の地点へ転送される。
+    〈K4の集合意識体（tick214）〉 有効期限: tickNone
+     自律的な集合知が誕生。全タスク報酬から0.5%を吸収し、最貧困の5体へ毎tick還元し続ける。
+    〈W33の死角次元（tick281）〉 有効期限: tickNone
+     公安の感知能力が半減する隠れ空間が出現。すべてのエージェントが薄い影に守られる。
+    〈W48の量子暗号炉（tick298）〉 有効期限: tickNone
+     全取引が量子暗号化。HACK による窃取が物理的に不可能になり、SMUGGLE 報酬は3倍に跳ね上がる。
+    〈W07の時間跳躍ゲート（tick1015）〉 有効期限: tickNone
+     二つの地点間に瞬間移動口が出現。片方に踏み込むとゼロコストで対の地点へ転送される。
+    〈W29の時間跳躍ゲート（tick1042）〉 有効期限: tickNone
+     二つの地点間に瞬間移動口が出現。片方に踏み込むとゼロコストで対の地点へ転送される。
+    〈W20の時間跳躍ゲート（tick1068）〉 有効期限: tickNone
+     二つの地点間に瞬間移動口が出現。片方に踏み込むとゼロコストで対の地点へ転送される。
+
+【訃報・転生】
+  tick309: W48 死亡 （第0世代 / 経験144 / 遺産48.1EC）
+  tick393: W23 死亡 （第0世代 / 経験3 / 遺産683.1EC）
+  tick480: W48 死亡 （第1世代 / 経験115 / 遺産671.8EC）
+  tick1078: O8 死亡 （第0世代 / 経験9 / 遺産19781.6EC）
+  tick1349: O1 死亡 （第0世代 / 経験2 / 遺産229378999.2EC）
+  転生: 5体 （新世代として復活）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  以上、本号終わり。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+============================================================
+都市新聞保存: logs/city_daily.txt

@@ -841,6 +841,9 @@ class Simulator:
                         and agent.tr >= 0):
                     continue
                 if can_bid and agent.energy > task.energy_cost:
+                    # HEAVY タスクはRT >= 1.0 が必要（資源集約型作業）
+                    if task.task_type == TaskType.HEAVY and agent.rt < 1.0:
+                        continue
                     # タスクタイプ別役職ボーナス確認（0.0 = 入札不可）
                     role_bonus = task.role_bid_bonus(agent.role)
                     if role_bonus == 0.0:
@@ -1009,7 +1012,7 @@ class Simulator:
             agent.spend_energy(Agent.WORK_COST)
             # gift_economy: 違法タスクが合法化され課税対象になる
             if self._has_active_invention("gift_economy"):
-                tax_rate = self.economy.current_tax_rate
+                tax_rate = self.policy_params["tax_rate"]
                 net = task.reward * (1.0 - tax_rate)
                 self.economy.tax_pool += task.reward * tax_rate
                 agent.balance += net
@@ -1135,7 +1138,7 @@ class Simulator:
                 continue  # 既に逮捕中
             seized = round(agent.balance * SEIZE_RATIO, 1)
             agent.balance = max(0.0, agent.balance - seized)
-            self.economy.tax_pool += seized
+            self._bank_reserves += seized  # 没収金は銀行準備金へ（経済から消滅させず再流通）
             agent.arrested_until = self.tick + ARREST_DURATION
             agent.status = AgentStatus.IDLE
             agent.assigned_task_id = None
@@ -1459,7 +1462,7 @@ class Simulator:
 
     def _run_bank(self) -> None:
         """銀行システム: 預金利息・融資・返済・デフォルト処理。"""
-        # 預金利息（1.5%/tick）
+        # 預金利息（1.5%/tick）— 準備金から支払う（無から生成しない）
         for agent in self.agents:
             dep = self._bank_deposits.get(agent.agent_id, 0.0)
             if dep > 0:
@@ -1467,9 +1470,12 @@ class Simulator:
                 if self._has_active_invention("entropy_reversal"):
                     rate *= 5.0
                 interest = round(dep * rate, 2)
+                interest = min(interest, self._bank_reserves)  # 準備金以上は払えない
+                if interest <= 0:
+                    continue
                 agent.balance += interest
                 self._bank_deposits[agent.agent_id] += interest
-                self._bank_reserves += interest * 0.5  # 準備金へ半分
+                self._bank_reserves -= interest  # 準備金から支払う
                 self._emit(EventType.BANK_INTEREST, agent_id=agent.agent_id,
                            data={"interest": interest, "deposit": round(dep, 2)})
 
@@ -1758,6 +1764,10 @@ class Simulator:
             net = task.reward * (1 - self.policy_params["tax_rate"])
             if self._has_active_invention("chaos_amplifier"):
                 net = round(net * 1.8, 2)
+            # ── Fix3: 経験値・TR による報酬スケーリング ──────────────────
+            exp_mult = 1.0 + min(agent.experience / 500.0, 0.20)   # 最大+20%
+            tr_mult  = 1.0 + max(0.0, min(agent.tr / 200.0, 0.10)) # 最大+10%
+            net = round(net * exp_mult * tr_mult, 2)
             # GATHERタスクはRT（Resource Token）で報酬、ECではない
             if task.task_type == TaskType.GATHER:
                 agent.rt += round(task.reward, 1)
@@ -1823,8 +1833,44 @@ class Simulator:
                            data={"x": task.x, "y": task.y,
                                  "gathered": gathered,
                                  "carrying": agent.resources})
-            # 経験値加算（記憶資本）。記憶洪水: 2倍
-            agent.experience += 2 if self._has_active_invention("memory_flood") else 1
+            # ── Fix2: タイプ別効果 ────────────────────────────────────────
+            base_exp = 2 if self._has_active_invention("memory_flood") else 1
+            # SURVEY: +3 経験（知識集約型作業）
+            if task.task_type == TaskType.SURVEY:
+                base_exp += 3
+            # URGENT: 作業期間の半分以内に完了で速攻ボーナス +2 exp
+            if task.task_type == TaskType.URGENT and task.expires_at is not None:
+                half_life = task.created_tick + (task.expires_at - task.created_tick) // 2
+                if self.tick <= half_life:
+                    base_exp += 2
+            # HEAVY: RT 1.0 消費してRT 0.5 還元（重作業は資源を変換する）
+            if task.task_type == TaskType.HEAVY:
+                agent.rt = max(0.0, round(agent.rt - 1.0, 1))
+                agent.rt = round(agent.rt + 0.5, 1)  # 変換効率50% → 差し引き -0.5 RT
+                self._emit(EventType.RT_SPENT, agent_id=agent.agent_id,
+                           data={"amount": 1.0, "reason": "heavy_task", "rt": agent.rt})
+            # TRADE: Traderが完了するとRT +0.5（物理流通）、Workerなら +0.2
+            if task.task_type == TaskType.TRADE:
+                rt_bonus = 0.5 if agent.role == AgentRole.TRADER else 0.2
+                agent.rt = round(agent.rt + rt_bonus, 1)
+                self._emit(EventType.RT_EARNED, agent_id=agent.agent_id,
+                           data={"amount": rt_bonus, "source": "trade_task", "rt": agent.rt})
+            # MICRO: 半径3の隣接エージェントにエネルギー +5（地域貢献）
+            if task.task_type == TaskType.MICRO:
+                for nb in self.agents:
+                    if nb.agent_id == agent.agent_id:
+                        continue
+                    if abs(nb.x - agent.x) + abs(nb.y - agent.y) <= 3:
+                        nb.energy = min(nb.energy + 5.0, Agent.MAX_ENERGY)
+            # SECURITY: 半径5の犯罪証拠を20%減衰（パトロール効果）
+            if task.task_type == TaskType.SECURITY:
+                for aid, ev in list(self._koan_evidence.items()):
+                    nb = self._get_agent(aid)
+                    if nb and abs(nb.x - agent.x) + abs(nb.y - agent.y) <= 5:
+                        self._koan_evidence[aid] = round(ev * 0.80, 2)
+
+            # 経験値加算
+            agent.experience += base_exp
             # TR付与（社会信用 — タスク種別でボーナス）
             tr_gain = 1.0
             if task.task_type == TaskType.CONSTRUCT:
@@ -1844,7 +1890,8 @@ class Simulator:
                     ally_share = round(net * 0.05, 2)
                     ally.balance += ally_share
             self._emit(EventType.TASK_COMPLETED, agent_id=agent.agent_id, task_id=task.task_id,
-                       data={"reward": net, "energy": round(agent.energy, 1), "balance": round(agent.balance, 1)})
+                       data={"reward": net, "task_type": task.task_type.value,
+                             "energy": round(agent.energy, 1), "balance": round(agent.balance, 1)})
             # 感情: タスク完了で少し幸福
             agent.emotion_level = min(10.0, agent.emotion_level + 1.0)
             # 因果ループ: タスク完了が過去に干渉し同種タスクを引き寄せる（10%）
@@ -2076,8 +2123,9 @@ class Simulator:
 
             dist = abs(agent.x - cx) + abs(agent.y - cy)
             if dist > 2:
-                # 部屋に向かって移動
+                # 部屋に向かって移動（statusをMOVINGにしないと_move_agentsが無視する）
                 agent.target_x, agent.target_y = cx, cy
+                agent.status = AgentStatus.MOVING
                 continue
 
             # 入室 — RTを消費
@@ -2348,6 +2396,7 @@ class Simulator:
             "activated_tick": self.tick,
             "params":         params,
             "_pool":          0.0,
+            "signature":      dict(sig),
         }
 
     # ── 発明効果の適用 ────────────────────────────────────────────────────
@@ -2450,31 +2499,31 @@ class Simulator:
     # コンボ専用スペック（通常スペックより高い軸スコアが必要）
     _COMBO_SPECS = [
         {"type": "quantum_tunnel",
-         "requires": {"temporal": 0.05, "chaos": 0.03},   # 両軸が高い場合に解禁
+         "requires": {"temporal": 0.005, "chaos": 0.003},
          "sig": {"temporal": 8, "chaos": 4},
          "traits": {"chrono": 5, "explorer": 3}},
         {"type": "time_crystal",
-         "requires": {"temporal": 0.04, "economic": 0.03},
+         "requires": {"temporal": 0.004, "economic": 0.003},
          "sig": {"temporal": 6, "economic": 4},
          "traits": {"saver": 4, "specialist": 3}},
         {"type": "post_scarcity",
-         "requires": {"economic": 0.05, "political": 0.04},
+         "requires": {"economic": 0.005, "political": 0.004},
          "sig": {"economic": 7, "political": 5},
          "traits": {"rebel": 4, "drifter": 3}},
         {"type": "hive_mind",
-         "requires": {"social": 0.05, "temporal": 0.03},
+         "requires": {"social": 0.005, "temporal": 0.003},
          "sig": {"social": 8, "temporal": 3},
          "traits": {"conformist": 5, "drifter": 3}},
         {"type": "recursive_growth",
-         "requires": {"chaos": 0.04, "social": 0.04},
+         "requires": {"chaos": 0.004, "social": 0.004},
          "sig": {"chaos": 5, "social": 5},
          "traits": {"hustler": 3, "explorer": 3}},
         {"type": "gift_economy",
-         "requires": {"crime": 0.04, "political": 0.04},
+         "requires": {"crime": 0.004, "political": 0.004},
          "sig": {"crime": 6, "political": 6},
          "traits": {"rebel": 4, "nihilist": 3}},
         {"type": "temporal_anchor",
-         "requires": {"temporal": 0.06, "crime": 0.02},
+         "requires": {"temporal": 0.006, "crime": 0.002},
          "sig": {"temporal": 9, "crime": 3},
          "traits": {"chrono": 6, "gambler": 3}},
     ]
