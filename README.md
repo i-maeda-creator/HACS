@@ -138,6 +138,15 @@ P(当選) ∝ 入札額
 ```
 高い入札は有利だが確定ではない。SAVER や OPPORTUNIST が確率的に受注できる。
 
+### Memory Market（記憶売買）
+Trader が高経験値 Worker の AI 記憶を買い取り、新人 Worker に転売する。
+
+```
+高経験値 Worker → Trader が隣接時に記憶を仕入れ（experience × 買取レート）
+  → 新人 Worker に記憶を転売（マークアップ込み）
+  → 購入した Worker は 8tick 間 入札ボーナス（memory_boost）を得る
+```
+
 ### 精神と時の部屋（チャンバー）
 経験値が蓄積した Worker がRT を消費して入室できる特別空間。  
 経験値 120 以上 かつ TR ≥ 3.0 で **天才覚醒** → **世界改変発明** が生まれる。
@@ -381,7 +390,7 @@ hacs/
 ## 進捗ログ
 
 <!-- AUTO-UPDATED -->
-**最終更新: 2026-05-10**
+**最終更新: 2026-05-24**
 
 ### 実装済み
 
@@ -400,6 +409,7 @@ hacs/
 - [x] RT（Resource Token — 物理労働証明・Worker採集→Trader換算）
 - [x] TR（Trust Rating — 非売品・社会信頼指標）
 - [x] RT 市場（Worker→Trader 売却・マークアップ換算）
+- [x] Memory Market（記憶売買 — 高経験WorkerからTraderが仕入れ→新人Workerに転売・8tick入札ボーナス）
 
 **発明・文明システム**
 - [x] 精神と時の部屋（チャンバー — RT消費入室・天才覚醒）
